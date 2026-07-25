@@ -35,6 +35,20 @@ const ADDRESS_PARAM_DESC =
   "at 0xBC000000+. Most game state lives in user RAM. Note PPSSPP may also accept " +
   "0x88xxxxxx kernel-mode mirrors of the same physical memory.";
 
+const REPLACEMENTS_PARAM_DESC =
+  "Optional, default true (PPSSPP's own default — matches normal debugger behavior). " +
+  "PPSSPP's JIT overwrites the FIRST WORD of every code block it has compiled with an " +
+  "internal 'emuhack' marker (opcode 0x1A, MIPS_EMUHACK_OPCODE) so it can find its own " +
+  "compiled-code cache — reading memory with the default `true` shows you that patched " +
+  "byte, not the real instruction underneath. Pass `false` to read the REAL underlying " +
+  "bytes instead (PPSSPP transparently un-patches its JIT cache for the duration of this " +
+  "one read, then restores it — no CPU core change, no side effects on execution). " +
+  "USAGE: pass `false` whenever you're reading CODE to disassemble/decompile (e.g. " +
+  "dumping a region for Ghidra) — code that has already executed will otherwise come back " +
+  "corrupted at every JIT block boundary. Leave at the default `true` (or omit) when " +
+  "reading plain DATA (struct fields, counters) — the JIT never patches non-code memory, " +
+  "so it makes no difference there, and the default avoids the extra unpatch/repatch work.";
+
 const TOOLS: Tool[] = [
   // ── Connectivity & introspection ────────────────────────────────────────
 
@@ -71,6 +85,7 @@ const TOOLS: Tool[] = [
       required: ["address"],
       properties: {
         address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
+        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
       },
       additionalProperties: false,
     },
@@ -87,6 +102,7 @@ const TOOLS: Tool[] = [
       required: ["address"],
       properties: {
         address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
+        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
       },
       additionalProperties: false,
     },
@@ -103,6 +119,7 @@ const TOOLS: Tool[] = [
       required: ["address"],
       properties: {
         address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
+        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
       },
       additionalProperties: false,
     },
@@ -120,6 +137,7 @@ const TOOLS: Tool[] = [
       properties: {
         address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
         size:    { type: "integer", minimum: 1, maximum: 65536, description: "Number of bytes to read (1-65536). Larger reads work but produce big responses." },
+        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
       },
       additionalProperties: false,
     },
@@ -452,19 +470,19 @@ export function registerTools(server: Server, pp: PpssppClient): void {
       }
 
       case "ppsspp_read8": {
-        const r = await pp.call<{ value: number }>("memory.read_u8", { address: a() });
+        const r = await pp.call<{ value: number }>("memory.read_u8", { address: a(), replacements: p.replacements });
         return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
       }
       case "ppsspp_read16": {
-        const r = await pp.call<{ value: number }>("memory.read_u16", { address: a() });
+        const r = await pp.call<{ value: number }>("memory.read_u16", { address: a(), replacements: p.replacements });
         return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
       }
       case "ppsspp_read32": {
-        const r = await pp.call<{ value: number }>("memory.read_u32", { address: a() });
+        const r = await pp.call<{ value: number }>("memory.read_u32", { address: a(), replacements: p.replacements });
         return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
       }
       case "ppsspp_read_range": {
-        const r = await pp.call<{ base64: string }>("memory.read", { address: a(), size: p.size });
+        const r = await pp.call<{ base64: string }>("memory.read", { address: a(), size: p.size, replacements: p.replacements });
         const bytes = Buffer.from(r.base64 ?? "", "base64");
         const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
         return ok(`${addrHex(a())} [${bytes.length} bytes]:\n${hex}`);
