@@ -44,7 +44,7 @@ async function main() {
     { capabilities: { tools: {} } },
   );
 
-  registerTools(server, pp);
+  await registerTools(server, pp);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

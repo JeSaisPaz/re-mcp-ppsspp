@@ -10,6 +10,7 @@
   "files": [
     "dist/",
     "docs/",
+    "scripts/ghidra_sidecar.py",
     "README.md",
     "LICENSE"
   ],

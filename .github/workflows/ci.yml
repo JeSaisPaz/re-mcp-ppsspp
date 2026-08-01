@@ -26,11 +26,21 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
+      - name: Setup Python (for the optional Ghidra sidecar)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Install
         run: npm ci --ignore-scripts
 
       - name: Type-check & build
         run: npm run build
+
+      - name: Syntax-check the Ghidra sidecar script
+        # Can't exercise the actual pyghidra/Ghidra calls in CI (no Ghidra
+        # install), but this catches plain Python syntax errors.
+        run: python -m py_compile scripts/ghidra_sidecar.py
 
       - name: Run tests
         run: npm test

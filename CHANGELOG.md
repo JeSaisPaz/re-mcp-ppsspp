@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pseudo-C decompilation via Ghidra** (`ppsspp_decompile`/`_refresh`,
+  new `src/decompiler.ts` + `scripts/ghidra_sidecar.py`) — fully opt-in,
+  only registered when `GHIDRA_INSTALL_DIR` is set and `pyghidra` is
+  importable; the rest of the server has zero Python/Ghidra dependency.
+  A long-lived Python sidecar hosts a persistent Ghidra program per game
+  (keyed by disc ID) and talks to the Node server over a private TCP
+  loopback socket (newline-delimited JSON) rather than stdio, since
+  Ghidra/JVM logging would otherwise corrupt a stdio-framed protocol.
+  Code dumps hardcode `replacements:false` (JIT emuhack markers would
+  corrupt decompilation otherwise) and import at their real PSP address
+  so cross-references resolve correctly. Crash-isolated: a sidecar
+  death rejects pending calls and restarts lazily on the next call,
+  never taking down the MCP server itself.
+  **Experimental**: the raw-binary-import-with-base-address path was
+  written against documented pyghidra/Ghidra APIs but could not be
+  exercised against a real Ghidra installation in this project's
+  development environment (only the sidecar IPC protocol layer itself
+  was verified end-to-end) — see the README's setup section.
 - **Persistent per-game symbol store** (`ppsspp_symbol_add`/`_list`/`_remove`/
   `_annotate`/`_sync`, new `src/symbols.ts`) — a JSON file per PSP disc ID
   under `~/.mcp-ppsspp/symbols/` (override via `MCP_PPSSPP_SYMBOLS_DIR`),
