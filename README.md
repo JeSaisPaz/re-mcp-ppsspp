@@ -144,7 +144,8 @@ PSP is **little-endian** (MIPS Allegrex). Kernel-mode mirrors at `0x88xxxxxx` ma
 
 ```bash
 npm install
-npm run dev      # tsc --watch — autobuilds on src/ changes
+npm run dev       # tsc --watch — autobuilds on src/ changes
+npm test          # Vitest — mocks the WebSocket, no PPSSPP instance needed
 ```
 
 ## Debugging with the MCP Inspector

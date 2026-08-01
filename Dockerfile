@@ -1,13 +1,13 @@
 # Dockerfile — primarily for the Glama MCP registry (https://glama.ai/mcp/servers).
 #
 # Builds the MCP server and runs it over stdio. The server starts cleanly
-# WITHOUT BizHawk present: it binds the TCP listener and waits, and still
-# serves tools/list over stdio. That's exactly what Glama's "start + respond
-# to introspection" check needs.
+# WITHOUT PPSSPP present: it attempts a connection in the background and
+# still serves tools/list over stdio even if that connection fails. That's
+# exactly what Glama's "start + respond to introspection" check needs.
 #
-# For actual use you don't need Docker — `npm install -g mcp-bizhawk` and
-# point a running BizHawk at it (--socket_ip / --socket_port flags + load
-# lua/bridge.lua in the Lua Console). See README.md.
+# For actual use you don't need Docker — `npm install -g mcp-ppsspp` and
+# point it at a running PPSSPP instance with "Allow remote debugger" enabled
+# (PPSSPP_HOST / PPSSPP_PORT env vars). See README.md.
 
 FROM node:22-trixie-slim@sha256:e6d9a389d34ff9678438af985c9913fbd1eb6ed36e80fea56644f4b4f6dd70ba
 WORKDIR /app
@@ -22,9 +22,6 @@ COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npm run build
 
-# Ship the Lua bridge alongside (not used by the Node server itself — it's
-# loaded into BizHawk — but handy if someone docker-cp's it out).
-COPY lua/ ./lua/
-
-# The MCP server speaks JSON-RPC over stdio.
+# The MCP server speaks JSON-RPC over stdio and connects out to PPSSPP's
+# WebSocket debugger — no bridge/plugin to ship alongside it.
 ENTRYPOINT ["node", "dist/index.js"]

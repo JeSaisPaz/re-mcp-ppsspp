@@ -35,6 +35,74 @@ const ADDRESS_PARAM_DESC =
   "at 0xBC000000+. Most game state lives in user RAM. Note PPSSPP may also accept " +
   "0x88xxxxxx kernel-mode mirrors of the same physical memory.";
 
+type MemWidth = 8 | 16 | 32;
+
+const MEM_WIDTH_INFO: Record<MemWidth, {
+  readEvent: string;
+  writeEvent: string;
+  max: number;
+  valueLabel: string;
+  siblings: string;
+}> = {
+  8: {
+    readEvent: "memory.read_u8", writeEvent: "memory.write_u8", max: 0xFF,
+    valueLabel: "an unsigned 8-bit byte",
+    siblings: "For 16/32-bit values use ppsspp_read16/read32 (one call instead of multi-byte assembly); for spans use ppsspp_read_range.",
+  },
+  16: {
+    readEvent: "memory.read_u16", writeEvent: "memory.write_u16", max: 0xFFFF,
+    valueLabel: "an unsigned 16-bit little-endian value",
+    siblings: "For single bytes use ppsspp_read8; for 32-bit use ppsspp_read32; for arbitrary byte spans use ppsspp_read_range.",
+  },
+  32: {
+    readEvent: "memory.read_u32", writeEvent: "memory.write_u32", max: 0xFFFFFFFF,
+    valueLabel: "an unsigned 32-bit little-endian value",
+    siblings: "For 8/16-bit use ppsspp_read8/read16; for spans use ppsspp_read_range.",
+  },
+};
+
+function makeReadTool(width: MemWidth): Tool {
+  const info = MEM_WIDTH_INFO[width];
+  return {
+    name: `ppsspp_read${width}`,
+    description:
+      `PURPOSE: Read ${info.valueLabel} from PSP memory at the given physical address. ` +
+      `USAGE: ${info.siblings} ` +
+      `BEHAVIOR: No side effects — pure read. PSP is little-endian (MIPS Allegrex). Returns an error if the address isn't a valid PSP memory address (PPSSPP validates against the PSP's mapped regions). ` +
+      "RETURNS: Single line 'ADDR_HEX: VAL_DEC (0xVAL_HEX)'.",
+    inputSchema: {
+      type: "object",
+      required: ["address"],
+      properties: {
+        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
+        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
+function makeWriteTool(width: MemWidth): Tool {
+  const info = MEM_WIDTH_INFO[width];
+  return {
+    name: `ppsspp_write${width}`,
+    description:
+      `PURPOSE: Write ${info.valueLabel.replace("an ", "a ")} to PSP memory at the given physical address. ` +
+      `USAGE: ${info.siblings.replace(/read/g, "write")} ` +
+      `BEHAVIOR: DESTRUCTIVE: overwrites whatever was at \`address\` with no undo. Direct memory write — no hardware mediation. PSP is little-endian. Returns an error if the address is outside valid memory or value > ${info.max}. ` +
+      "RETURNS: Single line 'Wrote VAL → ADDR_HEX'.",
+    inputSchema: {
+      type: "object",
+      required: ["address", "value"],
+      properties: {
+        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
+        value:   { type: "integer", minimum: 0, maximum: info.max, description: `Value (0-${info.max}).` },
+      },
+      additionalProperties: false,
+    },
+  };
+}
+
 const REPLACEMENTS_PARAM_DESC =
   "Optional, default true (PPSSPP's own default — matches normal debugger behavior). " +
   "PPSSPP's JIT overwrites the FIRST WORD of every code block it has compiled with an " +
@@ -73,57 +141,9 @@ const TOOLS: Tool[] = [
 
   // ── Memory reads ────────────────────────────────────────────────────────
 
-  {
-    name: "ppsspp_read8",
-    description:
-      "PURPOSE: Read an unsigned 8-bit byte from PSP memory at the given physical address. " +
-      "USAGE: Use for single-byte status flags, counters, and 8-bit fields. For 16/32-bit values use ppsspp_read16/read32 (one call instead of multi-byte assembly); for spans use ppsspp_read_range. " +
-      "BEHAVIOR: No side effects — pure read. Returns an error if the address isn't a valid PSP memory address (PPSSPP validates against the PSP's mapped regions). " +
-      "RETURNS: Single line 'ADDR_HEX: VAL_DEC (0xVAL_HEX)'.",
-    inputSchema: {
-      type: "object",
-      required: ["address"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "ppsspp_read16",
-    description:
-      "PURPOSE: Read an unsigned 16-bit little-endian value from PSP memory at the given physical address. " +
-      "USAGE: Use for 16-bit game-state fields (most counters, IDs, small numerics). For single bytes use ppsspp_read8; for 32-bit use ppsspp_read32; for arbitrary byte spans use ppsspp_read_range. " +
-      "BEHAVIOR: No side effects — pure read. PSP is little-endian (MIPS Allegrex). Returns an error if address+2 exceeds the valid memory region. " +
-      "RETURNS: Single line 'ADDR_HEX: VAL_DEC (0xVAL_HEX)'.",
-    inputSchema: {
-      type: "object",
-      required: ["address"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "ppsspp_read32",
-    description:
-      "PURPOSE: Read an unsigned 32-bit little-endian value from PSP memory at the given physical address. " +
-      "USAGE: Use for 32-bit fields — timestamps, large counters, pointers, RGBA colors. For 8/16-bit use ppsspp_read8/read16; for spans use ppsspp_read_range. " +
-      "BEHAVIOR: No side effects — pure read. PSP is little-endian. Returns an error if address+4 exceeds the valid memory region. " +
-      "RETURNS: Single line 'ADDR_HEX: VAL_DEC (0xVAL_HEX)'.",
-    inputSchema: {
-      type: "object",
-      required: ["address"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        replacements: { type: "boolean", description: REPLACEMENTS_PARAM_DESC },
-      },
-      additionalProperties: false,
-    },
-  },
+  makeReadTool(8),
+  makeReadTool(16),
+  makeReadTool(32),
   {
     name: "ppsspp_read_range",
     description:
@@ -161,57 +181,9 @@ const TOOLS: Tool[] = [
 
   // ── Memory writes ───────────────────────────────────────────────────────
 
-  {
-    name: "ppsspp_write8",
-    description:
-      "PURPOSE: Write an unsigned byte (0-255) to PSP memory at the given physical address. " +
-      "USAGE: Use for single-byte cheats, debug pokes, game-state mutations. For 16/32-bit use ppsspp_write16/write32; for spans use ppsspp_write_range. " +
-      "BEHAVIOR: DESTRUCTIVE: overwrites whatever was at `address` with no undo. Direct memory write — no hardware mediation. Returns an error if the address is outside valid memory or value > 255. " +
-      "RETURNS: Single line 'Wrote VAL → ADDR_HEX'.",
-    inputSchema: {
-      type: "object",
-      required: ["address", "value"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        value:   { type: "integer", minimum: 0, maximum: 255, description: "Byte value (0-255)." },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "ppsspp_write16",
-    description:
-      "PURPOSE: Write an unsigned 16-bit little-endian value to PSP memory. " +
-      "USAGE: Use for 16-bit cheats and pokes (HP, score, coordinates). For single bytes use ppsspp_write8; for 32/larger use ppsspp_write32/write_range. " +
-      "BEHAVIOR: DESTRUCTIVE: overwrites two bytes with no undo. PSP is little-endian (low byte at `address`, high at address+1). Returns an error if address+2 exceeds valid memory or value > 65535. " +
-      "RETURNS: Single line 'Wrote VAL → ADDR_HEX'.",
-    inputSchema: {
-      type: "object",
-      required: ["address", "value"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        value:   { type: "integer", minimum: 0, maximum: 65535, description: "16-bit value (0-65535)." },
-      },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "ppsspp_write32",
-    description:
-      "PURPOSE: Write an unsigned 32-bit little-endian value to PSP memory. " +
-      "USAGE: Use for 32-bit cheats and pokes — timestamps, large counters, pointers. For 8/16-bit use ppsspp_write8/write16; for spans use ppsspp_write_range. " +
-      "BEHAVIOR: DESTRUCTIVE: overwrites four bytes with no undo. PSP is little-endian. Returns an error if address+4 exceeds valid memory or value > 4294967295. " +
-      "RETURNS: Single line 'Wrote VAL → ADDR_HEX'.",
-    inputSchema: {
-      type: "object",
-      required: ["address", "value"],
-      properties: {
-        address: { type: "integer", minimum: 0, description: ADDRESS_PARAM_DESC },
-        value:   { type: "integer", minimum: 0, maximum: 4294967295, description: "32-bit value (0-4294967295)." },
-      },
-      additionalProperties: false,
-    },
-  },
+  makeWriteTool(8),
+  makeWriteTool(16),
+  makeWriteTool(32),
   {
     name: "ppsspp_write_range",
     description:
@@ -469,16 +441,11 @@ export function registerTools(server: Server, pp: PpssppClient): void {
         return ok(lines.join("\n"));
       }
 
-      case "ppsspp_read8": {
-        const r = await pp.call<{ value: number }>("memory.read_u8", { address: a(), replacements: p.replacements });
-        return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
-      }
-      case "ppsspp_read16": {
-        const r = await pp.call<{ value: number }>("memory.read_u16", { address: a(), replacements: p.replacements });
-        return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
-      }
+      case "ppsspp_read8":
+      case "ppsspp_read16":
       case "ppsspp_read32": {
-        const r = await pp.call<{ value: number }>("memory.read_u32", { address: a(), replacements: p.replacements });
+        const width = Number(name.slice("ppsspp_read".length)) as MemWidth;
+        const r = await pp.call<{ value: number }>(MEM_WIDTH_INFO[width].readEvent, { address: a(), replacements: p.replacements });
         return ok(`${addrHex(a())}: ${fmtHex(r.value)}`);
       }
       case "ppsspp_read_range": {
@@ -492,16 +459,11 @@ export function registerTools(server: Server, pp: PpssppClient): void {
         return ok(`${addrHex(a())}: ${JSON.stringify(r.value ?? "")}`);
       }
 
-      case "ppsspp_write8": {
-        await pp.call("memory.write_u8", { address: a(), value: p.value });
-        return ok(`Wrote ${fmtHex(p.value)} → ${addrHex(a())}`);
-      }
-      case "ppsspp_write16": {
-        await pp.call("memory.write_u16", { address: a(), value: p.value });
-        return ok(`Wrote ${fmtHex(p.value)} → ${addrHex(a())}`);
-      }
+      case "ppsspp_write8":
+      case "ppsspp_write16":
       case "ppsspp_write32": {
-        await pp.call("memory.write_u32", { address: a(), value: p.value });
+        const width = Number(name.slice("ppsspp_write".length)) as MemWidth;
+        await pp.call(MEM_WIDTH_INFO[width].writeEvent, { address: a(), value: p.value });
         return ok(`Wrote ${fmtHex(p.value)} → ${addrHex(a())}`);
       }
       case "ppsspp_write_range": {

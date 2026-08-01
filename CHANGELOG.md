@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Vitest test suite** for `PpssppClient` (`src/ppsspp.test.ts`), mocking the
+  `ws` WebSocket — covers ticket correlation, error responses, timeouts,
+  `fireAndForget`/`waitForState`, and the reconnect state machine (regression
+  coverage for the v0.1.3 stale-`readyPromise` bug). Wired into CI as a real
+  test step (`npm test`), not just `tsc` type-checking.
+
+### Fixed
+
+- **`Dockerfile` was broken** — leftover from templating off `mcp-bizhawk`:
+  referenced BizHawk throughout and copied a `lua/` directory that doesn't
+  exist in this repo, so `docker build` would fail on that step. Cleaned up
+  to describe this server's actual PPSSPP/WebSocket architecture.
+- **MCP server version was hardcoded** to `"0.1.0"` in `src/index.ts`
+  regardless of the real `package.json` version — clients saw a stale
+  version string. Now read from `package.json` at startup.
+- **`scripts/smoke.cjs` and `scripts/verify-screenshot.cjs` hardcoded
+  Windows-only paths** (`C:/temp/...`) despite CI testing Linux/macOS/Windows
+  — now use `os.tmpdir()`.
+
+### Changed
+
+- De-duplicated `ppsspp_read8/16/read32` and `ppsspp_write8/16/write32` in
+  `src/tools.ts` behind shared width-parameterized generators — same
+  behavior and tool descriptions, less copy-paste to keep in sync.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

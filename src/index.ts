@@ -1,8 +1,16 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { PpssppClient } from "./ppsspp.js";
 import { registerTools } from "./tools.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PKG_VERSION: string = JSON.parse(
+  readFileSync(join(__dirname, "..", "package.json"), "utf8"),
+).version;
 
 const HOST = process.env.PPSSPP_HOST ?? "127.0.0.1";
 const PORT = parseInt(process.env.PPSSPP_PORT ?? "0", 10);
@@ -32,7 +40,7 @@ async function main() {
   });
 
   const server = new Server(
-    { name: "mcp-ppsspp", version: "0.1.0" },
+    { name: "mcp-ppsspp", version: PKG_VERSION },
     { capabilities: { tools: {} } },
   );
 

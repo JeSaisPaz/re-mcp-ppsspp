@@ -30,11 +30,12 @@
 
 const path = require("node:path");
 const fs   = require("node:fs");
+const os   = require("node:os");
 const { PpssppClient } = require(path.resolve(__dirname, "..", "dist", "ppsspp.js"));
 
 const PORT = parseInt(process.env.PPSSPP_PORT || "0", 10);
 const HOST = process.env.PPSSPP_HOST || "127.0.0.1";
-const OUT_DIR = process.env.PPSSPP_VERIFY_OUT || "C:/temp";
+const OUT_DIR = process.env.PPSSPP_VERIFY_OUT || os.tmpdir();
 
 if (!PORT) {
   console.error("PPSSPP_PORT not set. See Settings → Tools → Developer Tools in PPSSPP for the active port.");

@@ -32,6 +32,9 @@ jobs:
       - name: Type-check & build
         run: npm run build
 
+      - name: Run tests
+        run: npm test
+
       - name: Verify shebang and bin
         shell: bash
         run: |
