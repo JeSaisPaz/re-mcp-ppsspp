@@ -118,6 +118,7 @@ Restart Claude Desktop after editing.
 | `ppsspp_wait_for_break` | Resume and block until the next breakpoint/watchpoint hit, returning PC + disasm + registers + call stack in one call |
 | `ppsspp_texture_dump` | Capture the currently-bound GPU texture, PPSSPP-decoded (visual PNG or raw pixel bytes + format) |
 | `ppsspp_texture_clut_dump` | Capture the active palette (CLUT) for a paletted texture format |
+| `ppsspp_scan_new` / `_filter` / `_list` / `_reset` | Cheat-Engine-style memory value scanner for finding unknown variables |
 
 ### PSP memory map (cheat sheet)
 
@@ -156,6 +157,22 @@ pixel format):
    isolate exactly where the two diverge.
 5. `ppsspp_texture_dump` with the default `mode: "visual"` for a quick
    eyeball PNG once you just want to confirm what a texture looks like.
+
+### Finding an unknown variable's address
+
+The end-to-end loop for locating something like a physics variable whose
+address you don't know yet:
+
+1. `ppsspp_scan_new` — seed with a value or range if you can (e.g. "speed
+   ≈ 0 while parked") to avoid an expensive unfiltered full-RAM scan.
+2. Change the value in-game (accelerate, brake, ...), then
+   `ppsspp_scan_filter` with `increased`/`decreased`/`changed` to narrow.
+   Repeat until only a handful of candidates remain (`ppsspp_scan_list`).
+3. `ppsspp_watchpoint_add` (`write` or `change`) on the surviving
+   candidate, then `ppsspp_wait_for_break` — execution halts at the exact
+   instruction that touches it, with registers and a call stack already
+   bundled in the response.
+4. `ppsspp_scan_reset` once you're done with that session.
 
 ## Troubleshooting
 

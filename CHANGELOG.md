@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Memory value scanner** (`ppsspp_scan_new`/`_filter`/`_list`/`_reset`,
+  new `src/scanner.ts`) — a Cheat-Engine-style search for an unknown
+  variable's address: snapshot a range (optionally value/bounds-seeded),
+  then iteratively narrow with `exact`/`changed`/`unchanged`/`increased`/
+  `decreased`/`increasedBy`/`decreasedBy`/`range` predicates against the
+  previous snapshot. Float scans use a tolerance (default 0.0001) since
+  physics accumulator floats drift slightly frame to frame even at rest.
+  Candidates are stored in typed arrays (not a JS `Map`) to keep a
+  multi-million-entry full-RAM snapshot's memory footprint reasonable.
+  Composes with the new watchpoints + `ppsspp_wait_for_break`: narrow to
+  a candidate, arm a watchpoint on it, then catch the exact write site.
 - **Texture/VRAM inspection**: `ppsspp_texture_dump` (wrapping
   `gpu.buffer.texture`) and `ppsspp_texture_clut_dump` (`gpu.buffer.clut`)
   — PPSSPP's own reference-correct texture decode, for diagnosing a
