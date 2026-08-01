@@ -7,6 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Implemented the decompilation roadmap's Phases A–D**
+  (`docs/DECOMPILATION_ROADMAP.md`):
+  - **VFPU/Allegrex support**: the sidecar now imports code using the
+    `Allegrex:LE:32:default` language, requiring the
+    [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)
+    Ghidra extension — real vector-unit disassembly/decompilation instead
+    of stock Ghidra's generic MIPS module, which can't decode VFPU at all.
+  - **`ppsspp_decompile_module(moduleName?)`** — imports an entire loaded
+    module's memory in one shot (via `hle.module.list`, chunked/pipelined
+    reads through a new shared `src/concurrency.ts` helper also now used
+    by the memory scanner) instead of a caller-guessed address window.
+    Automatically applies every function/data name PPSSPP's own live HLE
+    knowledge or the persistent symbol store already has, via a new
+    sidecar `apply_symbols` command.
+  - **`ppsspp_decompile_module_export(moduleName?, outDir?)`** — decompiles
+    every function Ghidra found in a module (new sidecar `decompile_all`
+    command) and writes one `.c` file per function under
+    `~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/`, building a
+    browsable offline codebase instead of one-function-at-a-time results.
+  - `ppsspp_decompile`/`_refresh`'s existing behavior is unchanged.
+  - NID-database fallback naming and PPSSPP `.sym` format interop
+    (lower-priority parts of Phase C) and static EBOOT/ISO extraction
+    (Phase E) remain out of scope for now — see the roadmap doc.
+- **`docs/DECOMPILATION_ROADMAP.md`** — a researched integration plan for
+  the decompiler's next steps: adopting
+  [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)
+  for real VFPU (vector unit) disassembly/decompilation support (stock
+  Ghidra can't decode Allegrex's vector instructions, which physics/
+  graphics code leans on heavily), whole-module dumps instead of ad-hoc
+  address windows, automatic SDK call naming sourced from PPSSPP's own
+  live HLE knowledge (with a NID-database fallback via
+  [pspdev/psp-ghidra-scripts](https://github.com/pspdev/psp-ghidra-scripts)),
+  and batch decompile-and-export of a whole module to disk.
+- **Pseudo-C decompilation via Ghidra** (`ppsspp_decompile`/`_refresh`,
+  new `src/decompiler.ts` + `scripts/ghidra_sidecar.py`) — fully opt-in,
+  only registered when `GHIDRA_INSTALL_DIR` is set and `pyghidra` is
+  importable; the rest of the server has zero Python/Ghidra dependency.
+  A long-lived Python sidecar hosts a persistent Ghidra program per game
+  (keyed by disc ID) and talks to the Node server over a private TCP
+  loopback socket (newline-delimited JSON) rather than stdio, since
+  Ghidra/JVM logging would otherwise corrupt a stdio-framed protocol.
+  Code dumps hardcode `replacements:false` (JIT emuhack markers would
+  corrupt decompilation otherwise) and import at their real PSP address
+  so cross-references resolve correctly. Crash-isolated: a sidecar
+  death rejects pending calls and restarts lazily on the next call,
+  never taking down the MCP server itself.
+  **Experimental**: the raw-binary-import-with-base-address path was
+  written against documented pyghidra/Ghidra APIs but could not be
+  exercised against a real Ghidra installation in this project's
+  development environment (only the sidecar IPC protocol layer itself
+  was verified end-to-end) — see the README's setup section.
+- **Persistent per-game symbol store** (`ppsspp_symbol_add`/`_list`/`_remove`/
+  `_annotate`/`_sync`, new `src/symbols.ts`) — a JSON file per PSP disc ID
+  under `~/.mcp-ppsspp/symbols/` (override via `MCP_PPSSPP_SYMBOLS_DIR`),
+  so named addresses/structs/notes survive PPSSPP restarts and MCP
+  sessions, unlike PPSSPP's own `hle.func.*`/`hle.data.*` live-session
+  tables. Atomic writes (temp file + rename) plus an in-process write
+  lock. `ppsspp_symbol_add` best-effort mirrors into the live session by
+  default so disassembly shows the name immediately; `ppsspp_symbol_sync`
+  re-pushes everything in one batch after a game (re)load.
+- **Memory value scanner** (`ppsspp_scan_new`/`_filter`/`_list`/`_reset`,
+  new `src/scanner.ts`) — a Cheat-Engine-style search for an unknown
+  variable's address: snapshot a range (optionally value/bounds-seeded),
+  then iteratively narrow with `exact`/`changed`/`unchanged`/`increased`/
+  `decreased`/`increasedBy`/`decreasedBy`/`range` predicates against the
+  previous snapshot. Float scans use a tolerance (default 0.0001) since
+  physics accumulator floats drift slightly frame to frame even at rest.
+  Candidates are stored in typed arrays (not a JS `Map`) to keep a
+  multi-million-entry full-RAM snapshot's memory footprint reasonable.
+  Composes with the new watchpoints + `ppsspp_wait_for_break`: narrow to
+  a candidate, arm a watchpoint on it, then catch the exact write site.
+- **Texture/VRAM inspection**: `ppsspp_texture_dump` (wrapping
+  `gpu.buffer.texture`) and `ppsspp_texture_clut_dump` (`gpu.buffer.clut`)
+  — PPSSPP's own reference-correct texture decode, for diagnosing a
+  separate texture-decoding implementation (swizzling, CLUT/palette
+  handling, pixel format) against ground truth. `mode: "raw"` returns
+  undecoded native pixel bytes + PPSSPP's format descriptor for byte-exact
+  comparison; the default `"visual"` mode returns a viewable inline PNG.
+  Shares the pause/capture/resume dance with `ppsspp_screenshot` (now
+  factored into a shared `withStepping()` helper).
+- **`ppsspp_wait_for_break`** — the core live-debugging loop: resumes
+  execution (if stopped) and blocks until the CPU next stops for any
+  reason, then returns PC + a disassembly window + full registers + call
+  stack in ONE response, instead of a resume followed by three separate
+  follow-up calls. `resume:false` peeks without disturbing current state.
+  The reported stop reason is a best-effort reconstruction (breakpoint
+  address match, or watchpoint hit-count delta) since PPSSPP's broadcast
+  doesn't carry an explicit "why" field.
+- **MIPS disassembly and expression evaluation**: `ppsspp_disasm` and
+  `ppsspp_search_disasm` (wrapping PPSSPP's own `memory.disasm` /
+  `memory.searchDisasm` — no bundled disassembler needed) and
+  `ppsspp_evaluate` (`cpu.evaluate`, register/label/operator expressions).
+- **Memory watchpoints** (`ppsspp_watchpoint_add/_update/_remove/_list`,
+  wrapping `memory.breakpoint.*`) — data breakpoints on read/write/change,
+  distinct from the existing execution breakpoints. The core building block
+  for "find what code touches this variable."
+- **Extended CPU breakpoints**: `ppsspp_breakpoint_add`/`_update` now accept
+  `enabled`, `log`, `condition`, `logFormat` (previously only a bare
+  address was ever sent to PPSSPP, even though it supports all of these).
+- **HLE introspection**: `ppsspp_backtrace` (call stack), `ppsspp_thread_list`,
+  `ppsspp_module_list`, and session-scoped symbol tables
+  `ppsspp_func_list/_add/_rename/_remove/_scan` and
+  `ppsspp_data_list/_add/_rename/_remove` (wrapping `hle.*`). Note:
+  `ppsspp_func_scan` matches known PSP SDK/firmware signatures, not custom
+  game code — see its tool description for what that means for RE work on
+  a game like GT with no debug symbols.
+- `PpssppClient` is now an `EventEmitter`: untracked broadcasts are
+  re-emitted by their PPSSPP event name (plus a catch-all `"broadcast"`),
+  and `"connected"`/`"disconnected"` fire at the existing socket
+  open/close points. New `waitForBreak()` resolves on the next
+  `cpu.stepping` broadcast — foundation for the upcoming
+  `ppsspp_wait_for_break` live-debugging tool.
+
+- **Vitest test suite** for `PpssppClient` (`src/ppsspp.test.ts`), mocking the
+  `ws` WebSocket — covers ticket correlation, error responses, timeouts,
+  `fireAndForget`/`waitForState`, and the reconnect state machine (regression
+  coverage for the v0.1.3 stale-`readyPromise` bug). Wired into CI as a real
+  test step (`npm test`), not just `tsc` type-checking.
+
+### Fixed
+
+- **`Dockerfile` was broken** — leftover from templating off `mcp-bizhawk`:
+  referenced BizHawk throughout and copied a `lua/` directory that doesn't
+  exist in this repo, so `docker build` would fail on that step. Cleaned up
+  to describe this server's actual PPSSPP/WebSocket architecture.
+- **MCP server version was hardcoded** to `"0.1.0"` in `src/index.ts`
+  regardless of the real `package.json` version — clients saw a stale
+  version string. Now read from `package.json` at startup.
+- **`scripts/smoke.cjs` and `scripts/verify-screenshot.cjs` hardcoded
+  Windows-only paths** (`C:/temp/...`) despite CI testing Linux/macOS/Windows
+  — now use `os.tmpdir()`.
+
+### Changed
+
+- De-duplicated `ppsspp_read8/16/read32` and `ppsspp_write8/16/write32` in
+  `src/tools.ts` behind shared width-parameterized generators — same
+  behavior and tool descriptions, less copy-paste to keep in sync.
+- **`src/tools.ts` split into `src/tools/`** (`core.ts`, `memory.ts`,
+  `breakpoints.ts`, `disasm.ts`, `shared.ts`, `index.ts`) — one growing
+  switch statement wasn't going to scale past the tool families landing in
+  this release. No behavior change for existing tools.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

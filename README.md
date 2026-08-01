@@ -85,6 +85,84 @@ Restart Claude Desktop after editing.
 |----------------|---------------|--------------------------------------------------|
 | `PPSSPP_HOST`  | `127.0.0.1`   | WebSocket host to dial                           |
 | `PPSSPP_PORT`  | (required)    | WebSocket port — see PPSSPP's debugger settings  |
+| `MCP_PPSSPP_SYMBOLS_DIR` | `~/.mcp-ppsspp/symbols/` | Where persistent per-game symbol files (`ppsspp_symbol_*`) are stored |
+| `GHIDRA_INSTALL_DIR` | (unset) | Enables `ppsspp_decompile`/`ppsspp_decompile_refresh` — see below. Unset by default; the rest of the server needs zero Python/Ghidra dependency |
+| `MCP_PPSSPP_PYTHON` | `python3` | Python interpreter used to run the Ghidra decompiler sidecar, if enabled |
+
+## Optional: pseudo-C decompilation (Ghidra)
+
+`ppsspp_decompile` / `_refresh` / `_module` / `_module_export` decompile
+live PSP MIPS+VFPU code into pseudo-C using a local
+[Ghidra](https://ghidra-sre.org/) instance (via
+[pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra)
++ [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex) for real PSP
+CPU support), fed with memory dumped straight from the running PPSSPP
+session — no static EBOOT/ISO extraction or decryption needed. This is
+**fully opt-in**: without the setup below, these tools are simply never
+registered, and the rest of the server has no Python or Ghidra dependency
+at all.
+
+**Setup:**
+1. Install [Ghidra](https://github.com/NationalSecurityAgency/ghidra/releases) and note its install directory.
+2. Install the [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex) extension (download the release zip matching your Ghidra version, then *File → Install Extensions* in Ghidra 19+, or copy its `Processors/Allegrex` folder into `$GHIDRA_INSTALL_DIR/Ghidra/Processors` on 18 and earlier) — this adds real Allegrex/VFPU disassembly and decompilation. Stock Ghidra's generic MIPS module cannot decode VFPU (PSP's vector unit) at all, which matters a lot for physics/graphics-heavy code.
+3. `pip install pyghidra`
+4. Set `GHIDRA_INSTALL_DIR` to your Ghidra install path when launching `mcp-ppsspp`.
+
+On startup, the server checks `GHIDRA_INSTALL_DIR` is set and that
+`python3 -c "import pyghidra"` succeeds; if either fails, the decompile
+tools are skipped (with a note on stderr) rather than being advertised and
+then failing on every call. A missing ghidra-allegrex extension isn't
+checked at startup (it would need booting the JVM, which is deliberately
+deferred) — it surfaces instead as a clear "invalid language ID" error on
+the first real decompile call; see the sidecar's own comments if that
+happens.
+
+**Architecture:** a long-lived Python child process
+(`scripts/ghidra_sidecar.py`) hosts a persistent Ghidra program and talks to
+the Node server over a private TCP loopback socket (newline-delimited JSON)
+— not stdio, since Ghidra/JVM logging writes to the child's stdout, which
+would otherwise corrupt a stdio-framed protocol. It starts lazily on the
+first `ppsspp_decompile*` call in a session (JVM + Ghidra startup can take
+tens of seconds) and is kept warm afterward. Code is always dumped with
+`replacements:false` (bypassing PPSSPP's JIT "emuhack" markers — see the
+memory tools section — this is hardcoded, not a parameter, since decompiling
+the patched view would corrupt every JIT block's first instruction) and
+imported at its real PSP address so absolute jumps/calls resolve correctly.
+The Ghidra program is keyed by the currently-loaded game's disc ID and
+persists across calls within a session — memory already imported is kept
+(not re-dumped) so accumulated analysis isn't thrown away as you explore
+adjacent functions.
+
+**Whole-module workflow:** `ppsspp_decompile(address)` imports just enough
+memory around one address, but `ppsspp_decompile_module(moduleName?)`
+imports an entire loaded module's memory in one shot (dumped from PPSSPP's
+already-decrypted, already-relocated live RAM, keyed via
+`ppsspp_module_list`) — giving Ghidra's analyzer full context and letting
+subsequent `ppsspp_decompile(address)` calls for functions inside it skip
+straight to decompiling. It also auto-labels every function/data address
+that PPSSPP's own live HLE knowledge (`ppsspp_func_list`/`ppsspp_data_list`
+— PPSSPP must resolve each imported SDK call's NID to know which HLE stub
+to run, so it already has names for everything it recognizes) or your
+persistent symbol store (`ppsspp_symbol_add`) already names, so decompiled
+output shows readable names immediately instead of drowning in unnamed SDK
+boilerplate. `ppsspp_decompile_module_export` goes further and decompiles
+*every* function in the module, writing one `.c` file per function under
+`~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/` — a real, browsable
+codebase you can re-export as your persistent symbol store grows.
+
+**Roadmap:** see [`docs/DECOMPILATION_ROADMAP.md`](docs/DECOMPILATION_ROADMAP.md)
+— Phases A–D above are implemented; static EBOOT/ISO extraction (Phase E)
+remains deliberately out of scope (retail EBOOT decryption needs your own
+keys/tools).
+
+**⚠️ Experimental:** the raw-binary-import-with-explicit-base-address path
+in `scripts/ghidra_sidecar.py` was written against documented pyghidra/Ghidra
+APIs but has not been exercised against a real Ghidra installation (this
+project's development environment had no Ghidra distribution available to
+test against — only the sidecar's IPC protocol layer itself was verified).
+If you hit errors, check `scripts/ghidra_sidecar.py`'s comments for the
+specific calls most likely to need adjusting for your Ghidra version, and
+please report back what you find.
 
 ## Tools
 
@@ -104,8 +182,23 @@ Restart Claude Desktop after editing.
 | `ppsspp_step` | Step one MIPS instruction |
 | `ppsspp_reset` | Soft-reset the loaded game |
 | `ppsspp_screenshot` | Capture framebuffer as inline PNG |
-| `ppsspp_get_registers` | Read all MIPS Allegrex registers |
-| `ppsspp_breakpoint_add` / `_remove` / `_list` | CPU execution breakpoints |
+| `ppsspp_get_registers` / `ppsspp_set_register` | Read/write MIPS Allegrex registers |
+| `ppsspp_breakpoint_add` / `_update` / `_remove` / `_list` | CPU execution breakpoints, with `condition`/`log`/`logFormat` |
+| `ppsspp_watchpoint_add` / `_update` / `_remove` / `_list` | Memory watchpoints (read/write/change) — "break when this value changes" |
+| `ppsspp_disasm` | MIPS disassembly at an address (PPSSPP's own disassembler) |
+| `ppsspp_search_disasm` | Find the next disassembly line matching a substring |
+| `ppsspp_evaluate` | Evaluate a register/label/operator expression |
+| `ppsspp_backtrace` | Current call stack |
+| `ppsspp_thread_list` | List PSP-OS (HLE) threads |
+| `ppsspp_module_list` | List loaded PSP modules |
+| `ppsspp_func_list` / `_add` / `_rename` / `_remove` / `_scan` | Session-only function symbol table |
+| `ppsspp_data_list` / `_add` / `_rename` / `_remove` | Session-only data symbol table |
+| `ppsspp_wait_for_break` | Resume and block until the next breakpoint/watchpoint hit, returning PC + disasm + registers + call stack in one call |
+| `ppsspp_texture_dump` | Capture the currently-bound GPU texture, PPSSPP-decoded (visual PNG or raw pixel bytes + format) |
+| `ppsspp_texture_clut_dump` | Capture the active palette (CLUT) for a paletted texture format |
+| `ppsspp_scan_new` / `_filter` / `_list` / `_reset` | Cheat-Engine-style memory value scanner for finding unknown variables |
+| `ppsspp_symbol_add` / `_list` / `_remove` / `_annotate` / `_sync` | Persistent, per-game named-address knowledge base (survives PPSSPP restarts) |
+| `ppsspp_decompile` / `_refresh` / `_module` / `_module_export` | Pseudo-C decompilation via a local Ghidra sidecar (opt-in — see "Optional: pseudo-C decompilation" below) |
 
 ### PSP memory map (cheat sheet)
 
@@ -122,6 +215,44 @@ PSP is **little-endian** (MIPS Allegrex). Kernel-mode mirrors at `0x88xxxxxx` ma
 ### PSP buttons
 
 `cross`, `circle`, `triangle`, `square`, `up`, `down`, `left`, `right`, `start`, `select`, `ltrigger`, `rtrigger`, `home`.
+
+### Diagnosing a texture decoder against PPSSPP's reference
+
+PPSSPP only exposes "the currently bound texture" (no API to list every
+cached texture at once), so cataloging several means pausing/stepping to
+each relevant draw call. Workflow for tracking down a texture-decoding bug
+in a separate tool (wrong swizzle/unswizzle, wrong CLUT indexing, wrong
+pixel format):
+
+1. `ppsspp_breakpoint_add` at (or near) the draw call using the texture,
+   then `ppsspp_wait_for_break` to land on it.
+2. `ppsspp_texture_dump` with `mode: "raw"` — PPSSPP's format descriptor
+   (e.g. `A1B5G5R5_UNORM_PACK16`) plus the already-decoded native pixel
+   bytes are ground truth for what that VRAM data actually means.
+3. For paletted (4-bit/8-bit indexed) formats, `ppsspp_texture_clut_dump`
+   for the active palette PPSSPP is using.
+4. `ppsspp_read_range` over the texture's VRAM address (`0x04000000` -
+   `0x041FFFFF`) for the raw, undecoded bytes — diff your own decoder's
+   output for those same bytes against PPSSPP's decode from step 2 to
+   isolate exactly where the two diverge.
+5. `ppsspp_texture_dump` with the default `mode: "visual"` for a quick
+   eyeball PNG once you just want to confirm what a texture looks like.
+
+### Finding an unknown variable's address
+
+The end-to-end loop for locating something like a physics variable whose
+address you don't know yet:
+
+1. `ppsspp_scan_new` — seed with a value or range if you can (e.g. "speed
+   ≈ 0 while parked") to avoid an expensive unfiltered full-RAM scan.
+2. Change the value in-game (accelerate, brake, ...), then
+   `ppsspp_scan_filter` with `increased`/`decreased`/`changed` to narrow.
+   Repeat until only a handful of candidates remain (`ppsspp_scan_list`).
+3. `ppsspp_watchpoint_add` (`write` or `change`) on the surviving
+   candidate, then `ppsspp_wait_for_break` — execution halts at the exact
+   instruction that touches it, with registers and a call stack already
+   bundled in the response.
+4. `ppsspp_scan_reset` once you're done with that session.
 
 ## Troubleshooting
 
@@ -144,7 +275,8 @@ PSP is **little-endian** (MIPS Allegrex). Kernel-mode mirrors at `0x88xxxxxx` ma
 
 ```bash
 npm install
-npm run dev      # tsc --watch — autobuilds on src/ changes
+npm run dev       # tsc --watch — autobuilds on src/ changes
+npm test          # Vitest — mocks the WebSocket, no PPSSPP instance needed
 ```
 
 ## Debugging with the MCP Inspector

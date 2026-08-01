@@ -20,6 +20,7 @@
 
 const path = require("node:path");
 const fs   = require("node:fs");
+const os   = require("node:os");
 const { PpssppClient } = require(path.resolve(__dirname, "..", "dist", "ppsspp.js"));
 
 const PORT = parseInt(process.env.PPSSPP_PORT || "0", 10);
@@ -88,7 +89,7 @@ if (!PORT) {
         if (m) b64 = m[1];
       }
       if (b64) {
-        const screenshotPath = "C:/temp/ppsspp-smoke.png";
+        const screenshotPath = path.join(os.tmpdir(), "ppsspp-smoke.png");
         fs.writeFileSync(screenshotPath, Buffer.from(b64, "base64"));
         console.log(`  saved to ${screenshotPath} (${Buffer.byteLength(b64, "base64")} bytes decoded)`);
       } else {
