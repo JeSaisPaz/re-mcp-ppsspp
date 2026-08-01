@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MIPS disassembly and expression evaluation**: `ppsspp_disasm` and
+  `ppsspp_search_disasm` (wrapping PPSSPP's own `memory.disasm` /
+  `memory.searchDisasm` — no bundled disassembler needed) and
+  `ppsspp_evaluate` (`cpu.evaluate`, register/label/operator expressions).
+- **Memory watchpoints** (`ppsspp_watchpoint_add/_update/_remove/_list`,
+  wrapping `memory.breakpoint.*`) — data breakpoints on read/write/change,
+  distinct from the existing execution breakpoints. The core building block
+  for "find what code touches this variable."
+- **Extended CPU breakpoints**: `ppsspp_breakpoint_add`/`_update` now accept
+  `enabled`, `log`, `condition`, `logFormat` (previously only a bare
+  address was ever sent to PPSSPP, even though it supports all of these).
+- **HLE introspection**: `ppsspp_backtrace` (call stack), `ppsspp_thread_list`,
+  `ppsspp_module_list`, and session-scoped symbol tables
+  `ppsspp_func_list/_add/_rename/_remove/_scan` and
+  `ppsspp_data_list/_add/_rename/_remove` (wrapping `hle.*`). Note:
+  `ppsspp_func_scan` matches known PSP SDK/firmware signatures, not custom
+  game code — see its tool description for what that means for RE work on
+  a game like GT with no debug symbols.
+- `PpssppClient` is now an `EventEmitter`: untracked broadcasts are
+  re-emitted by their PPSSPP event name (plus a catch-all `"broadcast"`),
+  and `"connected"`/`"disconnected"` fire at the existing socket
+  open/close points. New `waitForBreak()` resolves on the next
+  `cpu.stepping` broadcast — foundation for the upcoming
+  `ppsspp_wait_for_break` live-debugging tool.
+
 - **Vitest test suite** for `PpssppClient` (`src/ppsspp.test.ts`), mocking the
   `ws` WebSocket — covers ticket correlation, error responses, timeouts,
   `fireAndForget`/`waitForState`, and the reconnect state machine (regression
@@ -33,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - De-duplicated `ppsspp_read8/16/read32` and `ppsspp_write8/16/write32` in
   `src/tools.ts` behind shared width-parameterized generators — same
   behavior and tool descriptions, less copy-paste to keep in sync.
+- **`src/tools.ts` split into `src/tools/`** (`core.ts`, `memory.ts`,
+  `breakpoints.ts`, `disasm.ts`, `shared.ts`, `index.ts`) — one growing
+  switch statement wasn't going to scale past the tool families landing in
+  this release. No behavior change for existing tools.
 
 ## [0.2.0] - 2026-07-19
 

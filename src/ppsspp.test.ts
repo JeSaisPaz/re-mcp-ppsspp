@@ -234,3 +234,63 @@ describe("PpssppClient — reconnect (v0.1.3 regression)", () => {
     await expect(p).rejects.toThrow(/closed mid-request/i);
   });
 });
+
+describe("PpssppClient — event plumbing", () => {
+  it("emits 'connected' and 'disconnected' at socket open/close", async () => {
+    const pp = new PpssppClient({ port: 12345 });
+    const connected = vi.fn();
+    const disconnected = vi.fn();
+    pp.on("connected", connected);
+    pp.on("disconnected", disconnected);
+
+    const startPromise = pp.start();
+    await Promise.resolve();
+    const ws = instances[0];
+    ws.openNow();
+    await startPromise;
+    expect(connected).toHaveBeenCalledTimes(1);
+    expect(disconnected).not.toHaveBeenCalled();
+
+    ws.close();
+    expect(disconnected).toHaveBeenCalledTimes(1);
+    expect(disconnected.mock.calls[0][0]).toMatchObject({ code: 1000 });
+  });
+
+  it("re-emits an untracked broadcast by its PPSSPP event name, plus a catch-all 'broadcast'", async () => {
+    const { pp, ws } = await connectedClient();
+    const stepping = vi.fn();
+    const broadcast = vi.fn();
+    pp.on("cpu.stepping", stepping);
+    pp.on("broadcast", broadcast);
+
+    ws.receive({ event: "cpu.stepping", pc: 0x08812340 });
+
+    expect(stepping).toHaveBeenCalledTimes(1);
+    expect(stepping.mock.calls[0][0]).toMatchObject({ pc: 0x08812340 });
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("waitForBreak resolves on the next cpu.stepping broadcast", async () => {
+    const { pp, ws } = await connectedClient();
+
+    const waitPromise = pp.waitForBreak({ timeoutMs: 1000 });
+    ws.receive({ event: "cpu.stepping", pc: 0x08812340 });
+
+    await expect(waitPromise).resolves.toMatchObject({ pc: 0x08812340 });
+  });
+
+  it("waitForBreak rejects if the socket disconnects first", async () => {
+    const { pp, ws } = await connectedClient();
+
+    const waitPromise = pp.waitForBreak({ timeoutMs: 1000 });
+    ws.close();
+
+    await expect(waitPromise).rejects.toThrow(/disconnected/i);
+  });
+
+  it("waitForBreak times out if the CPU never stops", async () => {
+    const { pp } = await connectedClient();
+
+    await expect(pp.waitForBreak({ timeoutMs: 10 })).rejects.toThrow(/timed out/i);
+  });
+});

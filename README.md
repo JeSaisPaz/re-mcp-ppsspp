@@ -104,8 +104,17 @@ Restart Claude Desktop after editing.
 | `ppsspp_step` | Step one MIPS instruction |
 | `ppsspp_reset` | Soft-reset the loaded game |
 | `ppsspp_screenshot` | Capture framebuffer as inline PNG |
-| `ppsspp_get_registers` | Read all MIPS Allegrex registers |
-| `ppsspp_breakpoint_add` / `_remove` / `_list` | CPU execution breakpoints |
+| `ppsspp_get_registers` / `ppsspp_set_register` | Read/write MIPS Allegrex registers |
+| `ppsspp_breakpoint_add` / `_update` / `_remove` / `_list` | CPU execution breakpoints, with `condition`/`log`/`logFormat` |
+| `ppsspp_watchpoint_add` / `_update` / `_remove` / `_list` | Memory watchpoints (read/write/change) — "break when this value changes" |
+| `ppsspp_disasm` | MIPS disassembly at an address (PPSSPP's own disassembler) |
+| `ppsspp_search_disasm` | Find the next disassembly line matching a substring |
+| `ppsspp_evaluate` | Evaluate a register/label/operator expression |
+| `ppsspp_backtrace` | Current call stack |
+| `ppsspp_thread_list` | List PSP-OS (HLE) threads |
+| `ppsspp_module_list` | List loaded PSP modules |
+| `ppsspp_func_list` / `_add` / `_rename` / `_remove` / `_scan` | Session-only function symbol table |
+| `ppsspp_data_list` / `_add` / `_rename` / `_remove` | Session-only data symbol table |
 
 ### PSP memory map (cheat sheet)
 

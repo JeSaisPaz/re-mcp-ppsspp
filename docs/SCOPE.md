@@ -57,22 +57,32 @@ Mapping from PPSSPP WebSocket events → MCP tools:
 | `cpu.getAllRegs` | `ppsspp_get_registers` |
 | `game.reset` | `ppsspp_reset` |
 | `gpu.buffer.screenshot` | `ppsspp_screenshot` (inline PNG return) |
-| `cpu.breakpoint.add` / `.remove` / `.list` | `ppsspp_breakpoint_add` / `_remove` / `_list` |
+| `cpu.breakpoint.add` / `.update` / `.remove` / `.list` | `ppsspp_breakpoint_add` / `_update` / `_remove` / `_list` |
+| `memory.breakpoint.add` / `.update` / `.remove` / `.list` | `ppsspp_watchpoint_add` / `_update` / `_remove` / `_list` |
+| `memory.disasm` | `ppsspp_disasm` |
+| `memory.searchDisasm` | `ppsspp_search_disasm` |
+| `cpu.evaluate` | `ppsspp_evaluate` |
+| `hle.backtrace` | `ppsspp_backtrace` |
+| `hle.thread.list` | `ppsspp_thread_list` |
+| `hle.module.list` | `ppsspp_module_list` |
+| `hle.func.list` / `.add` / `.rename` / `.remove` / `.scan` | `ppsspp_func_list` / `_add` / `_rename` / `_remove` / `_scan` |
+| `hle.data.list` / `.add` / `.rename` / `.remove` | `ppsspp_data_list` / `_add` / `_rename` / `_remove` |
 
 ### What we don't (yet) expose
 
-PPSSPP has events for these, but they're not in v0.1.0:
+PPSSPP has events for these, still unwired:
 
-- **GPU**: `gpu.buffer.renderColor` / `renderDepth` / `renderStencil` / `texture` / `clut` — useful for graphics debugging
-- **GPU recording**: `gpu.record.dump` — captures a frame's GPU command stream
-- **GPU stats**: `gpu.stats.get` / `feed` / `vsync` — performance counters
-- **HLE**: `hle.thread.*`, `hle.func.*`, `hle.module.list`, `hle.backtrace` — PSP-OS-level introspection (kernel threads, named module symbols, call stacks)
-- **Disasm**: `memory.disasm`, `memory.assemble`, `memory.searchDisasm` — MIPS disassembly + assembly
-- **Memory breakpoints**: `memory.breakpoint.*` — read/write/access watchpoints (different from execution breakpoints)
-- **Replay**: `replay.*` — input record/replay (PPSSPP's native movie format)
-- **Config**: `broadcast.config.*` — get/set arbitrary PPSSPP settings
+- **GPU textures**: `gpu.buffer.texture` / `clut` — planned next (texture/VRAM RE toolkit).
+- **GPU**: `gpu.buffer.renderDepth` / `renderStencil` — useful for graphics debugging beyond what `ppsspp_screenshot`/the texture toolkit cover.
+- **GPU recording**: `gpu.record.dump` — captures a frame's GPU command stream.
+- **GPU stats**: `gpu.stats.get` / `feed` / `vsync` — performance counters.
+- **`memory.assemble`**: deliberately NOT wired. It writes assembled bytes into memory as a side effect (unconfirmed how destructively without live testing) — needs the same DESTRUCTIVE handling as `write8/16/32` before it's exposed, and isn't a priority for read-heavy RE workflows.
+- **Replay**: `replay.*` — input record/replay (PPSSPP's native movie format).
+- **Config**: `broadcast.config.*` — get/set arbitrary PPSSPP settings.
+- **hle.thread.wake/stop**: only `hle.thread.list` is exposed so far — waking/stopping threads is a more invasive operation than this pass covered.
+- **hle.func.removeRange**: only single-address `hle.func.remove` is exposed.
 
-All trivially addable in follow-ups if there's demand. The v0.1.0 surface targets "drive a game + inspect state + basic debugging" which covers most agent use cases.
+All trivially addable in follow-ups if there's demand.
 
 ### Notable PPSSPP capabilities NOT in other emulator bridges
 

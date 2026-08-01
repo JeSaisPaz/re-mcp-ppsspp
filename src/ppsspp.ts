@@ -26,6 +26,7 @@
 // the user has to opt in to enabling the debugger anyway.
 
 import { WebSocket } from "ws";
+import { EventEmitter } from "node:events";
 
 interface PendingCmd {
   ticket:  string;
@@ -43,7 +44,19 @@ export interface PpssppOptions {
   timeoutMs?: number;
 }
 
-export class PpssppClient {
+/**
+ * PpssppClient is also an EventEmitter. Two kinds of events are emitted:
+ *
+ *   - By PPSSPP event name (e.g. "cpu.stepping"), re-emitting an untracked
+ *     broadcast (a message with no `ticket`) the moment it arrives. See
+ *     src/events.ts for known broadcast shapes.
+ *   - Connection lifecycle: "connected" (socket open + handshake done) and
+ *     "disconnected" ({code, reason}) at the same two points the ticketed
+ *     call()/fireAndForget() machinery already reacts to.
+ *   - "broadcast" fires for every untracked message regardless of its
+ *     `event` field, as a catch-all for consumers that want everything.
+ */
+export class PpssppClient extends EventEmitter {
   private ws: WebSocket | null = null;
   /** Requests sent and awaiting a ticketed reply, keyed by ticket. */
   private inflight = new Map<string, PendingCmd>();
@@ -57,6 +70,12 @@ export class PpssppClient {
   private readyPromise: Promise<void> | null = null;
 
   constructor(opts: PpssppOptions = {}) {
+    super();
+    // Many short-lived once() listeners register over a session's lifetime
+    // (waitForBreak(), future scanner/decompiler polling) — none of these
+    // are a leak, they're removed as soon as they fire. Disable the
+    // default-10 warning rather than pick an arbitrary higher cap.
+    this.setMaxListeners(0);
     this.host      = opts.host      ?? "127.0.0.1";
     this.port      = opts.port      ?? 0;
     this.timeoutMs = opts.timeoutMs ?? 10000;
@@ -117,9 +136,11 @@ export class PpssppClient {
             p.reject(new Error("PPSSPP WebSocket closed mid-request"));
           }
           this.inflight.clear();
+          this.emit("disconnected", { code, reason: reason.toString() });
         });
         ws.on("message", (data) => this.onMessage(data.toString("utf8")));
         resolve();
+        this.emit("connected");
       });
     });
     return this.readyPromise;
@@ -143,10 +164,13 @@ export class PpssppClient {
     const ticket = msg.ticket as string | undefined;
     if (!ticket) {
       // Async broadcast — game state change, log line, stepping event, etc.
-      // Not currently surfaced to MCP clients.
+      // Re-emitted by PPSSPP event name (e.g. "cpu.stepping") plus a
+      // catch-all "broadcast", for anything registered via on()/once().
       if (process.env.MCP_PPSSPP_DEBUG) {
         process.stderr.write(`[trace] broadcast: ${text.slice(0, 200)}\n`);
       }
+      if (typeof msg.event === "string") this.emit(msg.event, msg);
+      this.emit("broadcast", msg);
       return;
     }
     const pending = this.inflight.get(ticket);
@@ -221,6 +245,41 @@ export class PpssppClient {
       await new Promise(r => setTimeout(r, intervalMs));
     }
     throw new Error(`waitForState timed out after ${timeoutMs}ms`);
+  }
+
+  /**
+   * Resolve on the next `cpu.stepping` broadcast — the CPU stopped, for any
+   * reason (breakpoint, watchpoint, step completed, or someone else calling
+   * cpu.stepping). Rejects if the socket disconnects first, or on timeout.
+   *
+   * The listener is registered BEFORE returning to the caller, specifically
+   * so callers can register-then-resume without racing a broadcast that
+   * fires between "send resume" and "start listening" — see
+   * ppsspp_wait_for_break, which calls this before firing cpu.resume.
+   */
+  async waitForBreak(opts: { timeoutMs?: number } = {}): Promise<{ pc?: number; ticks?: number }> {
+    const timeoutMs = opts.timeoutMs ?? 30000;
+    return new Promise((resolve, reject) => {
+      const onBreak = (msg: Record<string, unknown>) => {
+        cleanup();
+        resolve(msg as { pc?: number; ticks?: number });
+      };
+      const onDisconnect = () => {
+        cleanup();
+        reject(new Error("PPSSPP disconnected while waiting for a break"));
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`waitForBreak timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      const cleanup = () => {
+        clearTimeout(timer);
+        this.off("cpu.stepping", onBreak);
+        this.off("disconnected", onDisconnect);
+      };
+      this.once("cpu.stepping", onBreak);
+      this.once("disconnected", onDisconnect);
+    });
   }
 
   /**

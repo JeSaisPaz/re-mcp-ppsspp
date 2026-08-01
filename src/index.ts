@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { PpssppClient } from "./ppsspp.js";
-import { registerTools } from "./tools.js";
+import { registerTools } from "./tools/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_VERSION: string = JSON.parse(
