@@ -85,6 +85,7 @@ Restart Claude Desktop after editing.
 |----------------|---------------|--------------------------------------------------|
 | `PPSSPP_HOST`  | `127.0.0.1`   | WebSocket host to dial                           |
 | `PPSSPP_PORT`  | (required)    | WebSocket port — see PPSSPP's debugger settings  |
+| `MCP_PPSSPP_SYMBOLS_DIR` | `~/.mcp-ppsspp/symbols/` | Where persistent per-game symbol files (`ppsspp_symbol_*`) are stored |
 
 ## Tools
 
@@ -119,6 +120,7 @@ Restart Claude Desktop after editing.
 | `ppsspp_texture_dump` | Capture the currently-bound GPU texture, PPSSPP-decoded (visual PNG or raw pixel bytes + format) |
 | `ppsspp_texture_clut_dump` | Capture the active palette (CLUT) for a paletted texture format |
 | `ppsspp_scan_new` / `_filter` / `_list` / `_reset` | Cheat-Engine-style memory value scanner for finding unknown variables |
+| `ppsspp_symbol_add` / `_list` / `_remove` / `_annotate` / `_sync` | Persistent, per-game named-address knowledge base (survives PPSSPP restarts) |
 
 ### PSP memory map (cheat sheet)
 

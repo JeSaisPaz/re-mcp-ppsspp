@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Persistent per-game symbol store** (`ppsspp_symbol_add`/`_list`/`_remove`/
+  `_annotate`/`_sync`, new `src/symbols.ts`) — a JSON file per PSP disc ID
+  under `~/.mcp-ppsspp/symbols/` (override via `MCP_PPSSPP_SYMBOLS_DIR`),
+  so named addresses/structs/notes survive PPSSPP restarts and MCP
+  sessions, unlike PPSSPP's own `hle.func.*`/`hle.data.*` live-session
+  tables. Atomic writes (temp file + rename) plus an in-process write
+  lock. `ppsspp_symbol_add` best-effort mirrors into the live session by
+  default so disassembly shows the name immediately; `ppsspp_symbol_sync`
+  re-pushes everything in one batch after a game (re)load.
 - **Memory value scanner** (`ppsspp_scan_new`/`_filter`/`_list`/`_reset`,
   new `src/scanner.ts`) — a Cheat-Engine-style search for an unknown
   variable's address: snapshot a range (optionally value/bounds-seeded),

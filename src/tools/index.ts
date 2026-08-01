@@ -13,8 +13,9 @@ import { disasmTools } from "./disasm.js";
 import { liveDebugTools } from "./live_debug.js";
 import { textureTools } from "./texture.js";
 import { scannerTools } from "./scanner.js";
+import { symbolTools } from "./symbols.js";
 
-const MODULES = [coreTools, memoryTools, breakpointTools, disasmTools, liveDebugTools, textureTools, scannerTools];
+const MODULES = [coreTools, memoryTools, breakpointTools, disasmTools, liveDebugTools, textureTools, scannerTools, symbolTools];
 
 export function registerTools(server: Server, pp: PpssppClient): void {
   const tools: Tool[] = MODULES.flatMap((m) => m.tools);
