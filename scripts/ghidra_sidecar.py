@@ -14,6 +14,16 @@ not a proven implementation: run it against your real Ghidra install, watch
 stderr for exceptions, and expect to adjust method names/signatures for your
 installed Ghidra version (Ghidra's Java API has real drift across releases).
 
+REQUIRES the kotcrab/ghidra-allegrex extension installed in your Ghidra
+(https://github.com/kotcrab/ghidra-allegrex, Apache-2.0) — it's what adds
+real Allegrex/VFPU (PSP vector unit) disassembly and decompilation; stock
+Ghidra's MIPS module cannot decode VFPU instructions at all, which matters
+a great deal for physics/graphics-heavy game code. Install it via Ghidra's
+File -> Install Extensions (19+) or by copying its Processors/Allegrex
+folder into $GHIDRA_INSTALL_DIR/Ghidra/Processors (18 and earlier), then
+restart. If it's missing, import_blob's builder.language() call below will
+fail with a clear "invalid language ID" error — see README for setup.
+
 Protocol: this process binds a TCP server on 127.0.0.1 (OS-assigned port),
 prints exactly one line "READY <port>" to its own stdout as a handshake,
 then only ever writes free-form log text to stdout after that (never
@@ -24,8 +34,9 @@ request/response protocol is newline-delimited JSON over the TCP socket:
     <- {"id": "d1", "ok": true, "result": {...}}
     <- {"id": "d1", "ok": false, "error": "message"}
 
-Commands: ping, reset, import_blob, add_blob, analyze, decompile,
-disassemble, shutdown. See handle_command() below for params/results.
+Commands: ping, reset, import_blob, add_blob, analyze, apply_symbols,
+decompile, decompile_all, disassemble, shutdown. See handle_command()
+below for params/results.
 
 Only ONE client connection is expected (the Node sidecar client) — this is
 a private 1:1 process pair, not a general server.
@@ -41,10 +52,12 @@ from pathlib import Path
 
 SCRATCH_DIR = Path(tempfile.gettempdir()) / "mcp-ppsspp-ghidra-cache"
 
-# MIPS Allegrex (PSP CPU) is a little-endian MIPS32r2-ish core. This is the
-# closest stock Ghidra language ID; if your Ghidra build ships a dedicated
-# Allegrex variant, prefer that for more accurate instruction decoding.
-MIPS_LANGUAGE_ID = "MIPS:LE:32:default"
+# Confirmed from kotcrab/ghidra-allegrex's own language definition
+# (data/languages/allegrex.ldefs) — requires that extension to be
+# installed in the target Ghidra (see module docstring above). This gets
+# you real VFPU disassembly/decompilation and PSP-aware calling
+# conventions that stock Ghidra's generic MIPS module lacks entirely.
+ALLEGREX_LANGUAGE_ID = "Allegrex:LE:32:default"
 
 
 class GhidraState:
@@ -136,7 +149,7 @@ def import_blob(base_address, raw_bytes, program_name="psp_code"):
         .project(project)
         .name(program_name)
         .loaders(BinaryLoader)
-        .language(MIPS_LANGUAGE_ID)
+        .language(ALLEGREX_LANGUAGE_ID)
         .loaderArgs([("Base Address", hex(base_address))])
     )
     with builder.load() as load_results:
@@ -148,8 +161,8 @@ def import_blob(base_address, raw_bytes, program_name="psp_code"):
     state.flat_api = FlatProgramAPI(program)
     state.imported_ranges = [(base_address, base_address + len(raw_bytes))]
 
-    analyze_program()
-    return {"range": {"start": base_address, "end": base_address + len(raw_bytes)}}
+    analysis = analyze_program()
+    return {"range": {"start": base_address, "end": base_address + len(raw_bytes)}, **analysis}
 
 
 def add_blob(base_address, raw_bytes, mode="skip"):
@@ -201,21 +214,24 @@ def add_blob(base_address, raw_bytes, mode="skip"):
         raise
 
     state.imported_ranges.append((base_address, end))
-    analyze_program()
-    return {"range": {"start": base_address, "end": end}}
+    analysis = analyze_program()
+    return {"range": {"start": base_address, "end": end}, **analysis}
 
 
 def analyze_program(start=None, end=None):
     """Runs Ghidra's auto-analysis. `start`/`end` are accepted for a future
     scoped-analysis optimization but current implementation just re-runs
-    full-program analysis, which is correct (if not maximally fast)."""
+    full-program analysis, which is correct (if not maximally fast).
+    Returns the resulting function count so callers (Node-side
+    ppsspp_decompile_module) can report something meaningful after a
+    whole-module import."""
     if state.program is None:
         raise RuntimeError("No program open — call import_blob first.")
     from ghidra.program.util import GhidraProgramUtilities
     if GhidraProgramUtilities.shouldAskToAnalyze(state.program):
         state.flat_api.analyzeAll(state.program)
         GhidraProgramUtilities.markProgramAnalyzed(state.program)
-    return {}
+    return {"functionCount": state.program.getFunctionManager().getFunctionCount()}
 
 
 def _address_at(addr_int):
@@ -252,6 +268,85 @@ def decompile(address):
         "signature": signature,
         "disasm": disassemble_text(func.getEntryPoint(), func.getBody().getMaxAddress()),
     }
+
+
+def apply_symbols(entries):
+    """Batch-labels functions/data in the currently-open program from
+    externally-known names — PPSSPP's own live HLE knowledge (it must
+    resolve every imported SDK call's NID to know which HLE stub to run,
+    so it already has names for anything it recognizes) plus the MCP
+    server's persistent per-game symbol store. `entries` is a list of
+    {address, name, type: "function"|"data", size?}.
+
+    UNVERIFIED: exact Symbol/Function renaming API (setName + SourceType)
+    is standard Ghidra FlatProgramAPI usage but has not been exercised
+    end-to-end here.
+    """
+    if state.program is None:
+        raise RuntimeError("No program open — call import_blob first.")
+    from ghidra.program.model.symbol import SourceType
+
+    applied = 0
+    tx = state.program.startTransaction("mcp-ppsspp apply_symbols")
+    try:
+        for entry in entries:
+            try:
+                addr = _address_at(entry["address"])
+                name = entry["name"]
+                if entry.get("type") == "data":
+                    state.flat_api.createLabel(addr, name, True, SourceType.USER_DEFINED)
+                else:
+                    func = state.flat_api.getFunctionAt(addr)
+                    if func is None:
+                        func = state.flat_api.getFunctionContaining(addr)
+                    if func is None:
+                        func = state.flat_api.createFunction(addr, name)
+                    if func is not None:
+                        func.setName(name, SourceType.USER_DEFINED)
+                applied += 1
+            except Exception:
+                # Best-effort: one bad entry (e.g. address outside any
+                # imported range) shouldn't sink the whole batch.
+                traceback.print_exc(file=sys.stderr)
+                continue
+        state.program.endTransaction(tx, True)
+    except Exception:
+        state.program.endTransaction(tx, False)
+        raise
+    return {"applied": applied, "total": len(entries)}
+
+
+def decompile_all():
+    """Decompiles every function Ghidra's auto-analysis found in the
+    current program — the batch counterpart to decompile(address), used
+    by ppsspp_decompile_module_export to build an on-disk codebase instead
+    of one function at a time."""
+    if state.program is None:
+        raise RuntimeError("No program open — call import_blob first.")
+    from ghidra.app.decompiler import DecompInterface
+    from ghidra.util.task import ConsoleTaskMonitor
+
+    ifc = DecompInterface()
+    ifc.openProgram(state.program)
+    results = []
+    try:
+        for func in state.program.getFunctionManager().getFunctions(True):
+            try:
+                r = ifc.decompileFunction(func, 60, ConsoleTaskMonitor())
+                if not r.decompileCompleted():
+                    continue
+                results.append({
+                    "address": func.getEntryPoint().getOffset(),
+                    "name": func.getName(),
+                    "signature": str(func.getSignature()),
+                    "pseudoC": r.getDecompiledFunction().getC(),
+                })
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                continue
+    finally:
+        ifc.dispose()
+    return {"functions": results}
 
 
 def disassemble_text(start_addr, end_addr):
@@ -296,8 +391,12 @@ def handle_command(cmd, params):
         return add_blob(params["baseAddress"], raw, params.get("mode", "skip"))
     if cmd == "analyze":
         return analyze_program(params.get("start"), params.get("end"))
+    if cmd == "apply_symbols":
+        return apply_symbols(params.get("entries", []))
     if cmd == "decompile":
         return decompile(params["address"])
+    if cmd == "decompile_all":
+        return decompile_all()
     if cmd == "disassemble":
         return disassemble(params["address"], params["size"])
     if cmd == "shutdown":

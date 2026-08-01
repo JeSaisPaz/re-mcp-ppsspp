@@ -91,23 +91,31 @@ Restart Claude Desktop after editing.
 
 ## Optional: pseudo-C decompilation (Ghidra)
 
-`ppsspp_decompile` / `ppsspp_decompile_refresh` decompile live PSP MIPS code
-into pseudo-C using a local [Ghidra](https://ghidra-sre.org/) instance (via
-[pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra)),
-fed with memory dumped straight from the running PPSSPP session — no static
-EBOOT/ISO extraction needed. This is **fully opt-in**: without the setup
-below, these two tools are simply never registered, and the rest of the
-server has no Python or Ghidra dependency at all.
+`ppsspp_decompile` / `_refresh` / `_module` / `_module_export` decompile
+live PSP MIPS+VFPU code into pseudo-C using a local
+[Ghidra](https://ghidra-sre.org/) instance (via
+[pyghidra](https://github.com/NationalSecurityAgency/ghidra/tree/master/Ghidra/Features/PyGhidra)
++ [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex) for real PSP
+CPU support), fed with memory dumped straight from the running PPSSPP
+session — no static EBOOT/ISO extraction or decryption needed. This is
+**fully opt-in**: without the setup below, these tools are simply never
+registered, and the rest of the server has no Python or Ghidra dependency
+at all.
 
 **Setup:**
 1. Install [Ghidra](https://github.com/NationalSecurityAgency/ghidra/releases) and note its install directory.
-2. `pip install pyghidra`
-3. Set `GHIDRA_INSTALL_DIR` to your Ghidra install path when launching `mcp-ppsspp`.
+2. Install the [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex) extension (download the release zip matching your Ghidra version, then *File → Install Extensions* in Ghidra 19+, or copy its `Processors/Allegrex` folder into `$GHIDRA_INSTALL_DIR/Ghidra/Processors` on 18 and earlier) — this adds real Allegrex/VFPU disassembly and decompilation. Stock Ghidra's generic MIPS module cannot decode VFPU (PSP's vector unit) at all, which matters a lot for physics/graphics-heavy code.
+3. `pip install pyghidra`
+4. Set `GHIDRA_INSTALL_DIR` to your Ghidra install path when launching `mcp-ppsspp`.
 
 On startup, the server checks `GHIDRA_INSTALL_DIR` is set and that
 `python3 -c "import pyghidra"` succeeds; if either fails, the decompile
 tools are skipped (with a note on stderr) rather than being advertised and
-then failing on every call.
+then failing on every call. A missing ghidra-allegrex extension isn't
+checked at startup (it would need booting the JVM, which is deliberately
+deferred) — it surfaces instead as a clear "invalid language ID" error on
+the first real decompile call; see the sidecar's own comments if that
+happens.
 
 **Architecture:** a long-lived Python child process
 (`scripts/ghidra_sidecar.py`) hosts a persistent Ghidra program and talks to
@@ -125,11 +133,27 @@ persists across calls within a session — memory already imported is kept
 (not re-dumped) so accumulated analysis isn't thrown away as you explore
 adjacent functions.
 
+**Whole-module workflow:** `ppsspp_decompile(address)` imports just enough
+memory around one address, but `ppsspp_decompile_module(moduleName?)`
+imports an entire loaded module's memory in one shot (dumped from PPSSPP's
+already-decrypted, already-relocated live RAM, keyed via
+`ppsspp_module_list`) — giving Ghidra's analyzer full context and letting
+subsequent `ppsspp_decompile(address)` calls for functions inside it skip
+straight to decompiling. It also auto-labels every function/data address
+that PPSSPP's own live HLE knowledge (`ppsspp_func_list`/`ppsspp_data_list`
+— PPSSPP must resolve each imported SDK call's NID to know which HLE stub
+to run, so it already has names for everything it recognizes) or your
+persistent symbol store (`ppsspp_symbol_add`) already names, so decompiled
+output shows readable names immediately instead of drowning in unnamed SDK
+boilerplate. `ppsspp_decompile_module_export` goes further and decompiles
+*every* function in the module, writing one `.c` file per function under
+`~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/` — a real, browsable
+codebase you can re-export as your persistent symbol store grows.
+
 **Roadmap:** see [`docs/DECOMPILATION_ROADMAP.md`](docs/DECOMPILATION_ROADMAP.md)
-for planned upgrades — VFPU instruction support (Allegrex's vector unit,
-heavily used by physics/graphics code, which stock Ghidra can't decode),
-automatic SDK call naming from PPSSPP's own live HLE knowledge, and batch
-decompile-and-export of a whole module instead of one function at a time.
+— Phases A–D above are implemented; static EBOOT/ISO extraction (Phase E)
+remains deliberately out of scope (retail EBOOT decryption needs your own
+keys/tools).
 
 **⚠️ Experimental:** the raw-binary-import-with-explicit-base-address path
 in `scripts/ghidra_sidecar.py` was written against documented pyghidra/Ghidra
@@ -174,7 +198,7 @@ please report back what you find.
 | `ppsspp_texture_clut_dump` | Capture the active palette (CLUT) for a paletted texture format |
 | `ppsspp_scan_new` / `_filter` / `_list` / `_reset` | Cheat-Engine-style memory value scanner for finding unknown variables |
 | `ppsspp_symbol_add` / `_list` / `_remove` / `_annotate` / `_sync` | Persistent, per-game named-address knowledge base (survives PPSSPP restarts) |
-| `ppsspp_decompile` / `_refresh` | Pseudo-C decompilation via a local Ghidra sidecar (opt-in — see "Optional: pseudo-C decompilation" below) |
+| `ppsspp_decompile` / `_refresh` / `_module` / `_module_export` | Pseudo-C decompilation via a local Ghidra sidecar (opt-in — see "Optional: pseudo-C decompilation" below) |
 
 ### PSP memory map (cheat sheet)
 

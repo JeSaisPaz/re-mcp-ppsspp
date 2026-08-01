@@ -4,6 +4,7 @@
 // (dies with the server) — PPSSPP itself has no scanning API of its own.
 
 import type { PpssppClient } from "./ppsspp.js";
+import { mapConcurrent } from "./concurrency.js";
 
 export type ScanType = "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "float32";
 export type ScanPredicate =
@@ -85,21 +86,6 @@ function matchesPredicate(oldV: number, newV: number, opts: ScanFilterOptions, i
     case "decreasedBy": return opts.value !== undefined && approxEqual(oldV - newV, opts.value, isFloat, tolerance);
     case "range": return (opts.min === undefined || newV >= opts.min) && (opts.max === undefined || newV <= opts.max);
   }
-}
-
-/** Runs `fn` over `items` with at most `concurrency` in flight at once —
- *  pipelines PPSSPP round trips instead of serializing hundreds of them. */
-async function mapConcurrent<T, R>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  async function worker(): Promise<void> {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i], i);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, worker));
-  return results;
 }
 
 export class MemoryScanner {

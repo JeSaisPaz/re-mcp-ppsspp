@@ -5,7 +5,9 @@ import { SymbolStore, type SymbolEntry, type SymbolType, type SymbolConfidence }
 
 const store = new SymbolStore();
 
-async function currentDiscId(pp: PpssppClient): Promise<string> {
+/** Shared with tools/decompiler.ts, which needs the same disc-ID lookup to
+ *  merge the persistent symbol store into a Ghidra program's labels. */
+export async function currentDiscId(pp: PpssppClient): Promise<string> {
   const status = await pp.call<{ game?: { id?: string } | null }>("game.status");
   if (!status.game?.id) {
     throw new Error("No game loaded — symbol tools are keyed by PSP disc ID, load a game first.");

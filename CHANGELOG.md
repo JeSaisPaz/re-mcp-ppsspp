@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Implemented the decompilation roadmap's Phases A–D**
+  (`docs/DECOMPILATION_ROADMAP.md`):
+  - **VFPU/Allegrex support**: the sidecar now imports code using the
+    `Allegrex:LE:32:default` language, requiring the
+    [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)
+    Ghidra extension — real vector-unit disassembly/decompilation instead
+    of stock Ghidra's generic MIPS module, which can't decode VFPU at all.
+  - **`ppsspp_decompile_module(moduleName?)`** — imports an entire loaded
+    module's memory in one shot (via `hle.module.list`, chunked/pipelined
+    reads through a new shared `src/concurrency.ts` helper also now used
+    by the memory scanner) instead of a caller-guessed address window.
+    Automatically applies every function/data name PPSSPP's own live HLE
+    knowledge or the persistent symbol store already has, via a new
+    sidecar `apply_symbols` command.
+  - **`ppsspp_decompile_module_export(moduleName?, outDir?)`** — decompiles
+    every function Ghidra found in a module (new sidecar `decompile_all`
+    command) and writes one `.c` file per function under
+    `~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/`, building a
+    browsable offline codebase instead of one-function-at-a-time results.
+  - `ppsspp_decompile`/`_refresh`'s existing behavior is unchanged.
+  - NID-database fallback naming and PPSSPP `.sym` format interop
+    (lower-priority parts of Phase C) and static EBOOT/ISO extraction
+    (Phase E) remain out of scope for now — see the roadmap doc.
 - **`docs/DECOMPILATION_ROADMAP.md`** — a researched integration plan for
   the decompiler's next steps: adopting
   [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)

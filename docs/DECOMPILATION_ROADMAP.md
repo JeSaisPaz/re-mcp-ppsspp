@@ -1,5 +1,15 @@
 # Decompilation roadmap — VFPU, static PRX/NID resolution, batch export
 
+## Status
+
+**Phases A–D are implemented** (`scripts/ghidra_sidecar.py`,
+`src/tools/decompiler.ts`) as of this writing. **Phase E remains
+deliberately out of scope.** Implementation notes and known-unverified
+points are called out inline below, in addition to the general
+"EXPERIMENTAL" caveat already on the whole decompiler bridge (this
+project's development environment has no Ghidra install to test against —
+see the README and `scripts/ghidra_sidecar.py`'s own docstring).
+
 ## Context
 
 The Phase 6 PyGhidra bridge (`src/decompiler.ts`, `scripts/ghidra_sidecar.py`)
@@ -46,89 +56,73 @@ processing ourselves — the memory we read is already past both problems.
 The gap is purely "hand Ghidra the *whole* resident module instead of an
 arbitrary address window, using the right processor."
 
-## Phase A — Adopt ghidra-allegrex (VFPU + correct Allegrex decode)
+## Phase A — Adopt ghidra-allegrex (VFPU + correct Allegrex decode) ✅ Implemented
 
 - **User setup** (documented in README, not automated — installing Ghidra
   extensions is a one-time per-install step): download the `ghidra-allegrex`
   release zip matching the user's Ghidra version from the project's
   releases page, install via Ghidra's *File → Install Extensions* (Ghidra
   19+) or manual copy into `Ghidra/Processors/` (Ghidra 18 and earlier).
-- **`scripts/ghidra_sidecar.py`**: replace the placeholder
-  `MIPS_LANGUAGE_ID = "MIPS:LE:32:default"` with
-  `ALLEGREX_LANGUAGE_ID = "Allegrex:LE:32:default"` (confirmed from the
-  extension's own `.ldefs`), used in both `import_blob` and any future
-  loader calls.
-- **`src/decompiler.ts`**: extend `isGhidraAvailable()`'s cheap startup
-  probe with a filesystem-only check (no JVM boot) that
-  `$GHIDRA_INSTALL_DIR/Extensions` or `Ghidra/Processors/Allegrex` contains
-  the installed extension, so a missing-extension case fails at the same
-  "tools not registered, clear stderr note" point as a missing Ghidra
-  install, rather than as an opaque error on the first real decompile call.
+- **`scripts/ghidra_sidecar.py`**: `ALLEGREX_LANGUAGE_ID =
+  "Allegrex:LE:32:default"` (confirmed from the extension's own `.ldefs`),
+  used in `import_blob`'s `program_loader().language(...)` call.
+- **Deviation from the original plan**: did NOT add a filesystem-based
+  "is the extension installed" check to `isGhidraAvailable()`. Ghidra
+  extensions can land in more than one plausible location (bundled under
+  `$GHIDRA_INSTALL_DIR`, or a user's separate application-settings
+  `Extensions` folder depending on how Ghidra was installed/configured),
+  and guessing wrong would produce a false "not available" even when the
+  extension IS installed correctly. Instead, a missing extension surfaces
+  as Ghidra's own clear "invalid language ID" exception on the first real
+  decompile call — less proactive, but doesn't risk false negatives.
 - **Verify live** (can't be done in this project's dev environment, which
-  has no Ghidra install): confirm the exact extension zip naming/version
-  matching scheme and that `Allegrex:LE:32:default` loads without error via
-  `program_loader().language(...)`.
+  has no Ghidra install): confirm `Allegrex:LE:32:default` loads without
+  error via `program_loader().language(...)` against your installed
+  extension version.
 
-## Phase B — Whole-module import (not just an ad-hoc address window)
+## Phase B — Whole-module import (not just an ad-hoc address window) ✅ Implemented
 
-- Extend `ppsspp_decompile`/`_refresh` with a `module` mode: instead of a
-  caller-supplied `address`/`size`, look up `hle.module.list` (already
-  wrapped by `ppsspp_module_list`, Phase 1) for the named (or currently
-  active) module's base address + size, and dump that **entire** range in
-  one import instead of a manually-guessed window.
-- Reuse the scanner's chunked-and-pipelined read pattern
-  (`src/scanner.ts`'s `mapConcurrent` + `CHUNK_SIZE` convention) for the
-  bulk dump, since a full module can be several hundred KiB–low MiB —
-  the same "many round trips, bounded concurrency" shape as a full-RAM
-  scan.
-- New tool: `ppsspp_decompile_module(moduleName?)` — `moduleName` optional,
-  defaults to the module containing the current PC (useful right after a
-  `ppsspp_wait_for_break`).
-- **Document the caveat**: this only captures modules PPSSPP currently has
-  resident. An overlay/plugin PRX not yet loaded needs the game driven to
-  the state that loads it first — no static ISO extraction needed for
-  anything that's actually run at least once in the session.
+- `src/tools/decompiler.ts`: `ppsspp_decompile_module(moduleName?)` looks
+  up `hle.module.list` (via `ppsspp_module_list`, Phase 1) for the named
+  module — or the one containing the current PC if `moduleName` is
+  omitted — and dumps its **entire** address range in one import.
+- The chunked-and-pipelined bulk read is `dumpMemoryRangeChunked()` in
+  `src/tools/decompiler.ts`, built on a `mapConcurrent()` helper extracted
+  to `src/concurrency.ts` (also now used by `src/scanner.ts`, which
+  previously had its own private copy) — same "many round trips, bounded
+  concurrency" shape as a full-RAM scan.
+- Caveat (documented in the tool description and README): only captures
+  modules PPSSPP currently has resident. An overlay/plugin PRX not yet
+  loaded needs the game driven to the state that loads it first.
 
-## Phase C — Auto-naming from PPSSPP's live HLE knowledge
+## Phase C — Auto-naming from PPSSPP's live HLE knowledge ✅ Implemented (live-HLE pass only)
 
-- New sidecar command `apply_symbols(entries: [{address, name, type,
-  size?}])` — batch-labels functions/data in the currently-open Ghidra
-  program (loop over entries, `createLabel`/`createFunction` +
-  `setName` per Ghidra's `SymbolTable`/`FlatProgramAPI`, inside one
-  transaction for speed).
-- After `ppsspp_decompile_module` imports a module, the Node side
-  automatically calls `ppsspp_func_list` + `ppsspp_data_list` (session-live
-  HLE names) **and** the persistent `ppsspp_symbol_list` (Phase 5, your own
-  saved names) for the current disc ID, merges them, and pushes the result
-  into the sidecar via `apply_symbols` — so decompiled output shows
-  `sceKernelCreateThread`/`CalcTireGrip`/whatever's known immediately,
-  without a separate manual sync step.
-- **Fallback for what PPSSPP doesn't already know**: wire the NID XML
-  database (`ppsspp_niddb.xml`, PSP PRX Libraries Documentation Project)
-  into the sidecar as an optional, separately-downloaded data file
-  (`GHIDRA_PSP_NIDDB_PATH` env var, unset = skip this step) — parse
-  `sceModuleInfo`'s export/import NID tables from the imported blob
-  (mirroring `SonyPSPResolveNIDs.py`'s approach) and apply anything the
-  live-HLE pass above missed. Lower priority than the live-HLE pass, since
-  that already covers the bulk of "SDK noise" naming for a typical game.
-- **Nice-to-have, lower priority**: support the existing PPSSPP `.sym`
-  format (`PpssppExportSymFile`/`PpssppImportSymFile` scripts bundled with
-  ghidra-allegrex) as an alternate import/export path, for interop with
-  anyone using vanilla Ghidra UI + PPSSPP outside this MCP server.
+- `scripts/ghidra_sidecar.py`'s `apply_symbols(entries)` batch-labels
+  functions/data in the currently-open Ghidra program in one transaction.
+- `ppsspp_decompile_module`'s handler (`syncKnownSymbols()` in
+  `src/tools/decompiler.ts`) automatically merges `ppsspp_func_list` +
+  `ppsspp_data_list` (session-live HLE names) **and** the persistent
+  `ppsspp_symbol_list` (Phase 5) for the current disc ID, then pushes the
+  union into the sidecar via `apply_symbols` — no separate manual sync
+  step needed.
+- **Not implemented in this pass** (still valid lower-priority follow-ups,
+  deliberately deferred since the live-HLE pass already covers the bulk of
+  "SDK noise" naming for a typical game):
+  - The NID XML database fallback (`ppsspp_niddb.xml`, PSP PRX Libraries
+    Documentation Project) for exports PPSSPP's HLE doesn't already know.
+  - Interop with ghidra-allegrex's bundled PPSSPP `.sym`
+    (`PpssppExportSymFile`/`PpssppImportSymFile`) format.
 
-## Phase D — Batch decompile + export
+## Phase D — Batch decompile + export ✅ Implemented
 
-- New sidecar command `decompile_all()`: iterate every function Ghidra's
-  auto-analysis found in the current program (`program.getFunctionManager
-  ().getFunctions(true)`), decompile each (reusing the existing
-  `DecompInterface` setup from `decompile()`), return a list of
-  `{address, name, pseudoC, signature}`.
-- New tool `ppsspp_decompile_module_export(moduleName?, outDir?)`: runs
-  `ppsspp_decompile_module` (Phase B) if not already imported, then
-  `decompile_all`, then writes one `.c` file per function (named by its
-  resolved symbol if Phase C named it, else its address) under
-  `~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/` — building a real,
-  browsable, offline codebase instead of only interactive one-shot results.
+- `scripts/ghidra_sidecar.py`'s `decompile_all()` iterates every function
+  Ghidra's auto-analysis found in the current program and decompiles each
+  (reusing the same `DecompInterface` setup as single-address `decompile`).
+- `ppsspp_decompile_module_export(moduleName?, outDir?)` imports the module
+  (Phase B) if needed, applies known symbols (Phase C), runs
+  `decompile_all`, then writes one `ADDR_name.c` file per function under
+  `~/.mcp-ppsspp/decompiled/<discId>/<moduleName>/` (or `outDir`) —
+  building a real, browsable, offline codebase.
 - Pairs with Phase 5: as more functions get named via
   `ppsspp_symbol_add`/`_annotate`, re-running the export produces
   progressively more readable output — a natural "checkpoint your RE
