@@ -26,6 +26,45 @@ export function ok(text: string): ToolResult {
   return { content: [{ type: "text", text }] };
 }
 
+/**
+ * PPSSPP's gpu.buffer.* events all require CORE_STEPPING_CPU (or GPU
+ * stepping) state — they fail with "Neither CPU or GPU is stepping"
+ * otherwise. This transparently pauses (if not already), runs `fn`, then
+ * resumes (only if this call was the one that paused) — shared by
+ * ppsspp_screenshot and the texture-dump tools so callers never have to
+ * manage pause state themselves.
+ */
+export async function withStepping<T>(pp: PpssppClient, fn: () => Promise<T>): Promise<T> {
+  const statusBefore = await pp.call<{ stepping?: boolean }>("cpu.status");
+  const wasStepping = !!statusBefore.stepping;
+  if (!wasStepping) {
+    await pp.fireAndForget("cpu.stepping");
+    await pp.waitForState((s) => s.stepping === true);
+  }
+  try {
+    return await fn();
+  } finally {
+    if (!wasStepping) {
+      try {
+        await pp.fireAndForget("cpu.resume");
+        await pp.waitForState((s) => s.stepping === false, { timeoutMs: 2000 });
+      } catch { /* best-effort */ }
+    }
+  }
+}
+
+/** Strips a "data:image/png;base64,..." prefix if PPSSPP returns a URI
+ *  where base64 was requested (belt-and-suspenders, mirrors existing
+ *  screenshot handling). */
+export function extractBase64Png(r: { base64?: string; uri?: string }): string | undefined {
+  if (r.base64) return r.base64;
+  if (r.uri) {
+    const m = /^data:image\/png;base64,(.*)$/.exec(r.uri);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
 export function fmtHex(n: unknown): string {
   if (typeof n !== "number") return String(n);
   return `${n} (0x${n.toString(16).toUpperCase()})`;

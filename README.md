@@ -116,6 +116,8 @@ Restart Claude Desktop after editing.
 | `ppsspp_func_list` / `_add` / `_rename` / `_remove` / `_scan` | Session-only function symbol table |
 | `ppsspp_data_list` / `_add` / `_rename` / `_remove` | Session-only data symbol table |
 | `ppsspp_wait_for_break` | Resume and block until the next breakpoint/watchpoint hit, returning PC + disasm + registers + call stack in one call |
+| `ppsspp_texture_dump` | Capture the currently-bound GPU texture, PPSSPP-decoded (visual PNG or raw pixel bytes + format) |
+| `ppsspp_texture_clut_dump` | Capture the active palette (CLUT) for a paletted texture format |
 
 ### PSP memory map (cheat sheet)
 
@@ -132,6 +134,28 @@ PSP is **little-endian** (MIPS Allegrex). Kernel-mode mirrors at `0x88xxxxxx` ma
 ### PSP buttons
 
 `cross`, `circle`, `triangle`, `square`, `up`, `down`, `left`, `right`, `start`, `select`, `ltrigger`, `rtrigger`, `home`.
+
+### Diagnosing a texture decoder against PPSSPP's reference
+
+PPSSPP only exposes "the currently bound texture" (no API to list every
+cached texture at once), so cataloging several means pausing/stepping to
+each relevant draw call. Workflow for tracking down a texture-decoding bug
+in a separate tool (wrong swizzle/unswizzle, wrong CLUT indexing, wrong
+pixel format):
+
+1. `ppsspp_breakpoint_add` at (or near) the draw call using the texture,
+   then `ppsspp_wait_for_break` to land on it.
+2. `ppsspp_texture_dump` with `mode: "raw"` — PPSSPP's format descriptor
+   (e.g. `A1B5G5R5_UNORM_PACK16`) plus the already-decoded native pixel
+   bytes are ground truth for what that VRAM data actually means.
+3. For paletted (4-bit/8-bit indexed) formats, `ppsspp_texture_clut_dump`
+   for the active palette PPSSPP is using.
+4. `ppsspp_read_range` over the texture's VRAM address (`0x04000000` -
+   `0x041FFFFF`) for the raw, undecoded bytes — diff your own decoder's
+   output for those same bytes against PPSSPP's decode from step 2 to
+   isolate exactly where the two diverge.
+5. `ppsspp_texture_dump` with the default `mode: "visual"` for a quick
+   eyeball PNG once you just want to confirm what a texture looks like.
 
 ## Troubleshooting
 

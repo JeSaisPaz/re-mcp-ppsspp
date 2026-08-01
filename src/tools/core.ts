@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, addrHex, formatRegisters, PSP_BUTTONS, type ToolModule, type RegisterCategory } from "./shared.js";
+import { ok, addrHex, formatRegisters, withStepping, extractBase64Png, PSP_BUTTONS, type ToolModule, type RegisterCategory } from "./shared.js";
 
 const tools: Tool[] = [
   {
@@ -222,12 +222,6 @@ export const coreTools: ToolModule = {
     },
 
     ppsspp_screenshot: async (pp, p) => {
-      // PPSSPP's gpu.buffer.* events all require CORE_STEPPING_CPU (or GPU
-      // stepping) state — they fail with "Neither CPU or GPU is stepping"
-      // otherwise. We transparently pause→capture→resume so callers can
-      // screenshot any time without managing pause state. If the emulator
-      // was already paused, we leave it paused.
-      //
       // source='render' (default) uses gpu.buffer.renderColor → reads the
       // active GPU render target. Safer: GPU_GetCurrentFramebuffer hits a
       // different code path than the crash-prone GPU_GetOutputFramebuffer.
@@ -241,22 +235,11 @@ export const coreTools: ToolModule = {
       // recovers when PPSSPP is relaunched.
       const source = (p.source as string | undefined) ?? "render";
       const event  = source === "output" ? "gpu.buffer.screenshot" : "gpu.buffer.renderColor";
-      const statusBefore = await pp.call<{ stepping?: boolean; paused?: boolean }>("cpu.status");
-      const wasStepping = !!statusBefore.stepping;
-      if (!wasStepping) {
-        await pp.fireAndForget("cpu.stepping");
-        await pp.waitForState((s) => s.stepping === true);
-      }
-      try {
+      return withStepping(pp, async () => {
         // type: "base64" returns the raw base64 payload; the default "uri"
         // returns a "data:image/png;base64,..." prefix which we'd have to strip.
         const r = await pp.call<{ base64?: string; uri?: string }>(event, { type: "base64" });
-        let b64 = r.base64;
-        if (!b64 && r.uri) {
-          // Belt-and-suspenders: if PPSSPP returned a URI anyway, strip the prefix.
-          const m = /^data:image\/png;base64,(.*)$/.exec(r.uri);
-          if (m) b64 = m[1];
-        }
+        const b64 = extractBase64Png(r);
         if (!b64) {
           throw new Error(`PPSSPP did not return screenshot data from ${event} (no game loaded, or framebuffer not readable?)`);
         }
@@ -266,14 +249,7 @@ export const coreTools: ToolModule = {
             { type: "image" as const, data: b64, mimeType: "image/png" },
           ],
         };
-      } finally {
-        if (!wasStepping) {
-          try {
-            await pp.fireAndForget("cpu.resume");
-            await pp.waitForState((s) => s.stepping === false, { timeoutMs: 2000 });
-          } catch { /* best-effort */ }
-        }
-      }
+      });
     },
 
     ppsspp_get_registers: async (pp) => {

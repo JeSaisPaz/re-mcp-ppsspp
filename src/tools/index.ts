@@ -11,8 +11,9 @@ import { memoryTools } from "./memory.js";
 import { breakpointTools } from "./breakpoints.js";
 import { disasmTools } from "./disasm.js";
 import { liveDebugTools } from "./live_debug.js";
+import { textureTools } from "./texture.js";
 
-const MODULES = [coreTools, memoryTools, breakpointTools, disasmTools, liveDebugTools];
+const MODULES = [coreTools, memoryTools, breakpointTools, disasmTools, liveDebugTools, textureTools];
 
 export function registerTools(server: Server, pp: PpssppClient): void {
   const tools: Tool[] = MODULES.flatMap((m) => m.tools);

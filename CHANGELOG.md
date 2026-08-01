@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Texture/VRAM inspection**: `ppsspp_texture_dump` (wrapping
+  `gpu.buffer.texture`) and `ppsspp_texture_clut_dump` (`gpu.buffer.clut`)
+  — PPSSPP's own reference-correct texture decode, for diagnosing a
+  separate texture-decoding implementation (swizzling, CLUT/palette
+  handling, pixel format) against ground truth. `mode: "raw"` returns
+  undecoded native pixel bytes + PPSSPP's format descriptor for byte-exact
+  comparison; the default `"visual"` mode returns a viewable inline PNG.
+  Shares the pause/capture/resume dance with `ppsspp_screenshot` (now
+  factored into a shared `withStepping()` helper).
 - **`ppsspp_wait_for_break`** — the core live-debugging loop: resumes
   execution (if stopped) and blocks until the CPU next stops for any
   reason, then returns PC + a disassembly window + full registers + call
