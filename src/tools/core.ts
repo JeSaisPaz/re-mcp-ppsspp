@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, addrHex, PSP_BUTTONS, type ToolModule } from "./shared.js";
+import { ok, addrHex, formatRegisters, PSP_BUTTONS, type ToolModule, type RegisterCategory } from "./shared.js";
 
 const tools: Tool[] = [
   {
@@ -277,29 +277,8 @@ export const coreTools: ToolModule = {
     },
 
     ppsspp_get_registers: async (pp) => {
-      // PPSSPP's cpu.getAllRegs returns categories with PARALLEL arrays:
-      //   { categories: [{ name, registerNames: [...], uintValues: [...], floatValues: [...] }] }
-      // Not an array of {name, value} objects as I first assumed.
-      const r = await pp.call<{
-        categories?: Array<{
-          name: string;
-          registerNames?: string[];
-          uintValues?: number[];
-          floatValues?: string[];
-        }>;
-      }>("cpu.getAllRegs");
-      const lines: string[] = [];
-      for (const cat of r.categories ?? []) {
-        lines.push(`── ${cat.name} ──`);
-        const names = cat.registerNames ?? [];
-        const vals  = cat.uintValues ?? [];
-        for (let i = 0; i < Math.max(names.length, vals.length); i++) {
-          const nm = names[i] ?? `r${i}`;
-          const v  = vals[i];
-          lines.push(`  ${nm.padEnd(8)} = ${v !== undefined ? addrHex(v) : "(unavailable)"}`);
-        }
-      }
-      return ok(lines.join("\n") || "(no registers returned)");
+      const r = await pp.call<{ categories?: RegisterCategory[] }>("cpu.getAllRegs");
+      return ok(formatRegisters(r.categories ?? []));
     },
 
     ppsspp_set_register: async (pp, p) => {

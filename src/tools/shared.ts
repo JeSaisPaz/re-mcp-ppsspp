@@ -35,6 +35,45 @@ export function addrHex(n: number): string {
   return `0x${n.toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
+export interface RegisterCategory {
+  name: string;
+  registerNames?: string[];
+  uintValues?: number[];
+  floatValues?: string[];
+}
+
+/** PPSSPP's cpu.getAllRegs returns categories with PARALLEL arrays:
+ *  { categories: [{ name, registerNames: [...], uintValues: [...], floatValues: [...] }] }
+ *  Not an array of {name, value} objects. */
+export function formatRegisters(categories: RegisterCategory[]): string {
+  const lines: string[] = [];
+  for (const cat of categories) {
+    lines.push(`── ${cat.name} ──`);
+    const names = cat.registerNames ?? [];
+    const vals  = cat.uintValues ?? [];
+    for (let i = 0; i < Math.max(names.length, vals.length); i++) {
+      const nm = names[i] ?? `r${i}`;
+      const v  = vals[i];
+      lines.push(`  ${nm.padEnd(8)} = ${v !== undefined ? addrHex(v) : "(unavailable)"}`);
+    }
+  }
+  return lines.join("\n") || "(no registers returned)";
+}
+
+export interface BacktraceFrame {
+  entry: number;
+  pc: number;
+  sp: number;
+  stackSize?: number;
+  code?: string;
+}
+
+export function formatBacktrace(frames: BacktraceFrame[]): string {
+  if (frames.length === 0) return "(empty call stack)";
+  return frames.map((f, i) =>
+    `  #${i} pc=${addrHex(f.pc)} entry=${addrHex(f.entry)}${f.code ? ` (${f.code})` : ""} sp=${addrHex(f.sp)}`).join("\n");
+}
+
 // Canonical PSP button names PPSSPP's input.buttons.send understands.
 export const PSP_BUTTONS = [
   "cross", "circle", "triangle", "square",   // Face buttons

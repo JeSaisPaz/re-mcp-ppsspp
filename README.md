@@ -115,6 +115,7 @@ Restart Claude Desktop after editing.
 | `ppsspp_module_list` | List loaded PSP modules |
 | `ppsspp_func_list` / `_add` / `_rename` / `_remove` / `_scan` | Session-only function symbol table |
 | `ppsspp_data_list` / `_add` / `_rename` / `_remove` | Session-only data symbol table |
+| `ppsspp_wait_for_break` | Resume and block until the next breakpoint/watchpoint hit, returning PC + disasm + registers + call stack in one call |
 
 ### PSP memory map (cheat sheet)
 

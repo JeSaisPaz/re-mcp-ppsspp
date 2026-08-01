@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, addrHex, ADDRESS_PARAM_DESC, type ToolModule } from "./shared.js";
+import { ok, addrHex, formatBacktrace, ADDRESS_PARAM_DESC, type ToolModule, type BacktraceFrame } from "./shared.js";
 
 export interface DisasmLine {
   address: number;
@@ -290,15 +290,11 @@ export const disasmTools: ToolModule = {
       return ok(`${p.expression as string} = ${parts.join(" / ") || "(no result)"}`);
     },
     ppsspp_backtrace: async (pp, p) => {
-      const r = await pp.call<{ frames?: Array<{ entry: number; pc: number; sp: number; stackSize?: number; code?: string }> }>(
+      const r = await pp.call<{ frames?: BacktraceFrame[] }>(
         "hle.backtrace",
         p.thread !== undefined ? { thread: p.thread } : {},
       );
-      const frames = r.frames ?? [];
-      if (frames.length === 0) return ok("(empty call stack)");
-      const lines = frames.map((f, i) =>
-        `  #${i} pc=${addrHex(f.pc)} entry=${addrHex(f.entry)}${f.code ? ` (${f.code})` : ""} sp=${addrHex(f.sp)}`);
-      return ok(lines.join("\n"));
+      return ok(formatBacktrace(r.frames ?? []));
     },
     ppsspp_thread_list: async (pp) => {
       const r = await pp.call<{ threads?: Array<{ id: number; name?: string; status?: string; priority?: number; pc?: number; isCurrent?: boolean }> }>("hle.thread.list");

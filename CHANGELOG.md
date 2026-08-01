@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ppsspp_wait_for_break`** — the core live-debugging loop: resumes
+  execution (if stopped) and blocks until the CPU next stops for any
+  reason, then returns PC + a disassembly window + full registers + call
+  stack in ONE response, instead of a resume followed by three separate
+  follow-up calls. `resume:false` peeks without disturbing current state.
+  The reported stop reason is a best-effort reconstruction (breakpoint
+  address match, or watchpoint hit-count delta) since PPSSPP's broadcast
+  doesn't carry an explicit "why" field.
 - **MIPS disassembly and expression evaluation**: `ppsspp_disasm` and
   `ppsspp_search_disasm` (wrapping PPSSPP's own `memory.disasm` /
   `memory.searchDisasm` — no bundled disassembler needed) and
