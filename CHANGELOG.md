@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`docs/DECOMPILATION_ROADMAP.md`** — a researched integration plan for
+  the decompiler's next steps: adopting
+  [kotcrab/ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex)
+  for real VFPU (vector unit) disassembly/decompilation support (stock
+  Ghidra can't decode Allegrex's vector instructions, which physics/
+  graphics code leans on heavily), whole-module dumps instead of ad-hoc
+  address windows, automatic SDK call naming sourced from PPSSPP's own
+  live HLE knowledge (with a NID-database fallback via
+  [pspdev/psp-ghidra-scripts](https://github.com/pspdev/psp-ghidra-scripts)),
+  and batch decompile-and-export of a whole module to disk.
 - **Pseudo-C decompilation via Ghidra** (`ppsspp_decompile`/`_refresh`,
   new `src/decompiler.ts` + `scripts/ghidra_sidecar.py`) — fully opt-in,
   only registered when `GHIDRA_INSTALL_DIR` is set and `pyghidra` is

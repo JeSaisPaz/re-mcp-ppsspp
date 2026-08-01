@@ -125,6 +125,12 @@ persists across calls within a session — memory already imported is kept
 (not re-dumped) so accumulated analysis isn't thrown away as you explore
 adjacent functions.
 
+**Roadmap:** see [`docs/DECOMPILATION_ROADMAP.md`](docs/DECOMPILATION_ROADMAP.md)
+for planned upgrades — VFPU instruction support (Allegrex's vector unit,
+heavily used by physics/graphics code, which stock Ghidra can't decode),
+automatic SDK call naming from PPSSPP's own live HLE knowledge, and batch
+decompile-and-export of a whole module instead of one function at a time.
+
 **⚠️ Experimental:** the raw-binary-import-with-explicit-base-address path
 in `scripts/ghidra_sidecar.py` was written against documented pyghidra/Ghidra
 APIs but has not been exercised against a real Ghidra installation (this
