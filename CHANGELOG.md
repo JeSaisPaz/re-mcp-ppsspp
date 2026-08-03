@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`security.yml` no longer runs on a daily cron** — switched to
+  `workflow_dispatch` only. The daily schedule produced a daily email
+  (scheduled-run notifications, auto-commit pushes to main, auto-filed
+  issues) even on days nothing needed attention. Trigger it manually from
+  the Actions tab when a check is actually wanted.
+
 ## [0.3.0] - 2026-08-01
 
 ### Added

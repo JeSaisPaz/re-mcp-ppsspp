@@ -1,4 +1,4 @@
-name: Daily security & lockfile refresh
+name: Security & lockfile refresh
 
 # Two independent jobs:
 #   snyk      - report-only. Snyk's DB is consistently ahead of npm's, but its
@@ -9,10 +9,13 @@ name: Daily security & lockfile refresh
 #               transitive deps to their newest release inside the ranges
 #               package.json already declares. That is what closes advisories
 #               like the fast-uri one, with no advisory database involved.
+#
+# Manual-only (workflow_dispatch): this used to run on a daily cron, but that
+# generated a daily email (scheduled-run notifications, auto-commit pushes to
+# main, auto-filed issues) for every day nothing needed attention. Run it
+# from the Actions tab whenever a check is actually wanted.
 
 on:
-  schedule:
-    - cron: '17 6 * * *' # daily, 06:17 UTC — off the hour to dodge peak queueing
   workflow_dispatch:
 
 permissions:
