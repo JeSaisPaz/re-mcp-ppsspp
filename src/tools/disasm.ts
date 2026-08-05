@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, addrHex, formatBacktrace, ADDRESS_PARAM_DESC, type ToolModule, type BacktraceFrame } from "./shared.js";
+import { ok, addrHex, formatBacktrace, withStepping, callDataEvent, ADDRESS_PARAM_DESC, type ToolModule, type BacktraceFrame } from "./shared.js";
 
 export interface DisasmLine {
   address: number;
@@ -117,7 +117,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: Register a named function symbol in PPSSPP's live session, so ppsspp_disasm/ppsspp_backtrace show its name instead of a bare address. " +
       "USAGE: After identifying what a function does (e.g. via ppsspp_decompile or manual analysis), name it here for readable disassembly during the rest of this session. For a persistent record across sessions, use ppsspp_symbol_add instead (or in addition). " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table — lost on PPSSPP restart. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table — lost on PPSSPP restart. Transparently pauses the CPU if not already stepping (like ppsspp_screenshot), then resumes — PPSSPP requires stepping mode for this call. " +
       "RETURNS: Single line confirming address, size, and name.",
     inputSchema: {
       type: "object",
@@ -135,7 +135,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: Rename an existing function symbol in PPSSPP's live session. " +
       "USAGE: Refine a name as understanding improves (e.g. 'sub_08812340' → 'CalcTireGrip'). " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Returns an error if no function is registered at that address. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Transparently pauses the CPU if not already stepping, then resumes. Returns an error if no function is registered at that address. " +
       "RETURNS: Single line confirming the new name.",
     inputSchema: {
       type: "object",
@@ -152,7 +152,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: Remove a function symbol from PPSSPP's live session. " +
       "USAGE: Undo a mis-scanned or incorrect entry. " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Transparently pauses the CPU if not already stepping, then resumes. " +
       "RETURNS: Single line confirming removal.",
     inputSchema: {
       type: "object",
@@ -166,7 +166,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: Run PPSSPP's built-in function-signature scanner over a memory range. " +
       "USAGE: PPSSPP's scanner matches known SDK/firmware library signatures (sceKernel*, sceGe*, and similar statically-linked PSP SDK functions) — NOT custom game logic. For a retail game like Gran Turismo whose own physics code is Polyphony-authored and stripped of debug symbols, expect this to identify recognizable SDK boilerplate around the game's own code, not the physics functions themselves — its value here is narrowing what to IGNORE in disassembly, not finding what to reverse-engineer. " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table with whatever it recognizes in range. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table with whatever it recognizes in range. Transparently pauses the CPU if not already stepping, then resumes. " +
       "RETURNS: Confirmation that the scan ran (check ppsspp_func_list afterward for results).",
     inputSchema: {
       type: "object",
@@ -187,7 +187,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: List named data symbols in PPSSPP's live session. " +
       "USAGE: Companion to ppsspp_func_list for non-code addresses (structs, tables, globals). Session-only — see ppsspp_symbol_add for a persistent record. " +
-      "BEHAVIOR: No side effects — pure read. " +
+      "BEHAVIOR: No side effects — pure read. REQUIRES a PPSSPP build newer than the latest stable release (v1.20.4) — the hle.data.* debugger events this relies on only exist on PPSSPP's unreleased dev/master branch; fails with a clear error on any released version. " +
       "RETURNS: One line per entry: address, size, type, name.",
     inputSchema: { type: "object", properties: {} },
   },
@@ -196,7 +196,7 @@ const tools: Tool[] = [
     description:
       "PURPOSE: Register a named data symbol (struct/table/global) in PPSSPP's live session. " +
       "USAGE: Name a physics-state struct or array once you've located it, so disassembly referencing it shows the name. " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table — lost on PPSSPP restart; pair with ppsspp_symbol_add for persistence. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table — lost on PPSSPP restart; pair with ppsspp_symbol_add for persistence. Transparently pauses the CPU if not already stepping, then resumes. REQUIRES a PPSSPP build newer than the latest stable release (v1.20.4) — see ppsspp_data_list. " +
       "RETURNS: Single line confirming the entry.",
     inputSchema: {
       type: "object",
@@ -214,7 +214,7 @@ const tools: Tool[] = [
     name: "ppsspp_data_rename",
     description:
       "PURPOSE: Rename an existing data symbol in PPSSPP's live session. " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Returns an error if nothing is registered at that address. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Transparently pauses the CPU if not already stepping, then resumes. Returns an error if nothing is registered at that address. REQUIRES a PPSSPP build newer than the latest stable release (v1.20.4) — see ppsspp_data_list. " +
       "RETURNS: Single line confirming the new name.",
     inputSchema: {
       type: "object",
@@ -230,7 +230,7 @@ const tools: Tool[] = [
     name: "ppsspp_data_remove",
     description:
       "PURPOSE: Remove a data symbol from PPSSPP's live session. " +
-      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. " +
+      "BEHAVIOR: Modifies PPSSPP's live session-only symbol table. Transparently pauses the CPU if not already stepping, then resumes. REQUIRES a PPSSPP build newer than the latest stable release (v1.20.4) — see ppsspp_data_list. " +
       "RETURNS: Single line confirming removal.",
     inputSchema: {
       type: "object",
@@ -311,41 +311,41 @@ export const disasmTools: ToolModule = {
       if (fns.length === 0) return ok("(no functions registered)");
       return ok(fns.map((f) => `  ${addrHex(f.address)} size=${f.size ?? "?"} ${f.name}`).join("\n"));
     },
-    ppsspp_func_add: async (pp, p) => {
+    ppsspp_func_add: async (pp, p) => withStepping(pp, async () => {
       await pp.call("hle.func.add", { address: p.address, ...(p.size !== undefined ? { size: p.size } : {}), name: p.name });
       return ok(`Function ${p.name as string} added at ${addrHex(p.address as number)}`);
-    },
-    ppsspp_func_rename: async (pp, p) => {
+    }),
+    ppsspp_func_rename: async (pp, p) => withStepping(pp, async () => {
       await pp.call("hle.func.rename", { address: p.address, name: p.name });
       return ok(`Function at ${addrHex(p.address as number)} renamed to ${p.name as string}`);
-    },
-    ppsspp_func_remove: async (pp, p) => {
+    }),
+    ppsspp_func_remove: async (pp, p) => withStepping(pp, async () => {
       await pp.call("hle.func.remove", { address: p.address });
       return ok(`Function removed at ${addrHex(p.address as number)}`);
-    },
-    ppsspp_func_scan: async (pp, p) => {
+    }),
+    ppsspp_func_scan: async (pp, p) => withStepping(pp, async () => {
       await pp.call("hle.func.scan", { address: p.address, size: p.size, ...(p.remove !== undefined ? { remove: p.remove } : {}) });
       return ok(`Scanned ${addrHex(p.address as number)} (${p.size as number} bytes) for known SDK signatures — check ppsspp_func_list for results.`);
-    },
+    }),
 
     ppsspp_data_list: async (pp) => {
-      const r = await pp.call<{ data?: Array<{ name: string; address: number; size?: number; type?: string }> }>("hle.data.list");
+      const r = await callDataEvent<{ data?: Array<{ name: string; address: number; size?: number; type?: string }> }>(pp, "hle.data.list");
       const items = r.data ?? [];
       if (items.length === 0) return ok("(no data symbols registered)");
       return ok(items.map((d) => `  ${addrHex(d.address)} size=${d.size ?? "?"} [${d.type ?? "?"}] ${d.name}`).join("\n"));
     },
-    ppsspp_data_add: async (pp, p) => {
-      await pp.call("hle.data.add", { address: p.address, size: p.size, type: p.type, ...(p.name !== undefined ? { name: p.name } : {}) });
+    ppsspp_data_add: async (pp, p) => withStepping(pp, async () => {
+      await callDataEvent(pp, "hle.data.add", { address: p.address, size: p.size, type: p.type, ...(p.name !== undefined ? { name: p.name } : {}) });
       return ok(`Data symbol added at ${addrHex(p.address as number)} (${p.type as string}, size ${p.size as number})`);
-    },
-    ppsspp_data_rename: async (pp, p) => {
-      await pp.call("hle.data.rename", { address: p.address, name: p.name });
+    }),
+    ppsspp_data_rename: async (pp, p) => withStepping(pp, async () => {
+      await callDataEvent(pp, "hle.data.rename", { address: p.address, name: p.name });
       return ok(`Data symbol at ${addrHex(p.address as number)} renamed to ${p.name as string}`);
-    },
-    ppsspp_data_remove: async (pp, p) => {
-      await pp.call("hle.data.remove", { address: p.address });
+    }),
+    ppsspp_data_remove: async (pp, p) => withStepping(pp, async () => {
+      await callDataEvent(pp, "hle.data.remove", { address: p.address });
       return ok(`Data symbol removed at ${addrHex(p.address as number)}`);
-    },
+    }),
 
     ppsspp_module_list: async (pp) => {
       const r = await pp.call<{ modules?: Array<{ name: string; address: number; size?: number; isActive?: boolean }> }>("hle.module.list");

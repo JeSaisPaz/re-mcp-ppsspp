@@ -6,7 +6,7 @@
 // pausing/stepping to each relevant draw call and dumping one at a time.
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, withStepping, extractBase64Png, type ToolModule } from "./shared.js";
+import { ok, withStepping, callGpuBufferEvent, extractBase64Png, type ToolModule } from "./shared.js";
 
 const tools: Tool[] = [
   {
@@ -54,7 +54,8 @@ export const textureTools: ToolModule = {
 
       return withStepping(pp, async () => {
         if (mode === "raw") {
-          const r = await pp.call<{ width?: number; height?: number; format?: string; flipped?: boolean; base64?: string }>(
+          const r = await callGpuBufferEvent<{ width?: number; height?: number; format?: string; flipped?: boolean; base64?: string }>(
+            pp,
             "gpu.buffer.texture",
             { ...params, type: "base64" },
           );
@@ -66,7 +67,8 @@ export const textureTools: ToolModule = {
             `base64 (${Buffer.from(r.base64, "base64").length} bytes decoded):\n${r.base64}`,
           );
         }
-        const r = await pp.call<{ width?: number; height?: number; uri?: string; base64?: string }>(
+        const r = await callGpuBufferEvent<{ width?: number; height?: number; uri?: string; base64?: string }>(
+          pp,
           "gpu.buffer.texture",
           { ...params, type: "uri" },
         );
@@ -88,7 +90,8 @@ export const textureTools: ToolModule = {
       if (p.alpha !== undefined) params.alpha = p.alpha;
 
       return withStepping(pp, async () => {
-        const r = await pp.call<{ width?: number; height?: number; format?: string; base64?: string }>(
+        const r = await callGpuBufferEvent<{ width?: number; height?: number; format?: string; base64?: string }>(
+          pp,
           "gpu.buffer.clut",
           { ...params, type: "base64" },
         );

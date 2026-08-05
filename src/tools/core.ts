@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ok, addrHex, formatRegisters, withStepping, extractBase64Png, PSP_BUTTONS, type ToolModule, type RegisterCategory } from "./shared.js";
+import { ok, addrHex, formatRegisters, withStepping, callGpuBufferEvent, extractBase64Png, PSP_BUTTONS, type ToolModule, type RegisterCategory } from "./shared.js";
 
 const tools: Tool[] = [
   {
@@ -238,7 +238,7 @@ export const coreTools: ToolModule = {
       return withStepping(pp, async () => {
         // type: "base64" returns the raw base64 payload; the default "uri"
         // returns a "data:image/png;base64,..." prefix which we'd have to strip.
-        const r = await pp.call<{ base64?: string; uri?: string }>(event, { type: "base64" });
+        const r = await callGpuBufferEvent<{ base64?: string; uri?: string }>(pp, event, { type: "base64" });
         const b64 = extractBase64Png(r);
         if (!b64) {
           throw new Error(`PPSSPP did not return screenshot data from ${event} (no game loaded, or framebuffer not readable?)`);

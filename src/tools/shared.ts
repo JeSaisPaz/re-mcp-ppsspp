@@ -53,6 +53,71 @@ export async function withStepping<T>(pp: PpssppClient, fn: () => Promise<T>): P
   }
 }
 
+/**
+ * PPSSPP's hle.data.* debugger events (list/add/rename/remove) were only
+ * added to PPSSPP's dev/master branch — they are NOT present in any
+ * released version up to and including v1.20.4 (confirmed by diffing
+ * Core/Debugger/WebSocket/HLESubscriber.cpp at the v1.20.4 tag: it
+ * registers hle.func.* and hle.thread.* but not hle.data.*). Any such build
+ * rejects these calls with a generic transport-level "unknown event"
+ * error that gives no hint what's actually wrong. Detect that specific
+ * failure and reframe it with something actionable.
+ */
+export async function callDataEvent<T extends Record<string, unknown>>(
+  pp: PpssppClient,
+  event: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  try {
+    return await pp.call<T>(event, params);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/unknown event/i.test(msg)) {
+      throw new Error(
+        `${event} isn't supported by your PPSSPP build. PPSSPP's hle.data.* debugger events ` +
+        `(list/add/rename/remove) aren't in any released PPSSPP version as of v1.20.4 (the latest ` +
+        `stable release) — only PPSSPP's unreleased dev/master branch has them. Use a newer PPSSPP ` +
+        `dev build, or use ppsspp_symbol_add for a persistent, MCP-side data-symbol record instead ` +
+        `(works regardless of PPSSPP version, just doesn't show up in PPSSPP's own disassembly view).`,
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * PPSSPP's gpu.buffer.* events (screenshot/texture/CLUT capture) can fail
+ * with the opaque "Could not download output" when the underlying
+ * GPU_GetCurrentFramebuffer/GPU_GetOutputFramebuffer call returns false —
+ * this happens entirely inside PPSSPP's C++/GPU-backend code (not
+ * something this MCP server controls) and PPSSPP gives no further detail.
+ * Reframe it with the likely causes/remediation instead of the bare string.
+ */
+export async function callGpuBufferEvent<T extends Record<string, unknown>>(
+  pp: PpssppClient,
+  event: string,
+  params: Record<string, unknown> = {},
+): Promise<T> {
+  try {
+    return await pp.call<T>(event, params);
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/could not download output/i.test(msg)) {
+      throw new Error(
+        `${event} failed: PPSSPP could not produce a GPU buffer to capture right now. This comes ` +
+        `from inside PPSSPP's own GPU backend (GPU_GetCurrentFramebuffer/GPU_GetOutputFramebuffer ` +
+        `returned false) — not something this MCP server controls. Known causes: no frame has been ` +
+        `rendered yet since boot (still on the PPSSPP home screen or right after loading), the ` +
+        `active GPU backend doesn't support debug readback in the current state, or (for ` +
+        `gpu.buffer.screenshot specifically) a backend quirk on some games — try ` +
+        `ppsspp_texture_dump/ppsspp_screenshot again a moment later once gameplay is visibly running, ` +
+        `or switch PPSSPP's GPU backend (Settings → Graphics → Backend) and retry.`,
+      );
+    }
+    throw err;
+  }
+}
+
 /** Strips a "data:image/png;base64,..." prefix if PPSSPP returns a URI
  *  where base64 was requested (belt-and-suspenders, mirrors existing
  *  screenshot handling). */

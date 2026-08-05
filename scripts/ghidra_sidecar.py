@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
 """mcp-ppsspp Ghidra decompilation sidecar.
 
-*** EXPERIMENTAL — NOT VERIFIED AGAINST A LIVE GHIDRA INSTALL ***
+Verified end-to-end 2026-08-05 against Ghidra 12.1.2 + ghidra-allegrex v21.3
+(PSP game UCES01245 running live in PPSSPP v1.20.4). The import -> disassemble
+-> analyze -> decompile path produces pseudo-C, and the resulting disassembly
+was diffed instruction-by-instruction against PPSSPP's own disassembler over
+the same address range: 120/120 identical.
 
-This script was written to the best of documented pyghidra/Ghidra public
-API knowledge, but the environment it was authored in has no GHIDRA_INSTALL_DIR
-available (no Ghidra distribution, only the `pyghidra` pip package was
-installable) — so the JVM/Ghidra-facing calls below (especially the
-ProgramLoader.Builder chain used to set an explicit base address for a raw
-MIPS binary import, and the memory-block-creation calls used by add_blob)
-have NOT been exercised end-to-end. Treat this as a strong starting point,
-not a proven implementation: run it against your real Ghidra install, watch
-stderr for exceptions, and expect to adjust method names/signatures for your
-installed Ghidra version (Ghidra's Java API has real drift across releases).
+Getting there required fixing five bugs that all traced back to Ghidra Java
+API details this script had originally guessed at (each is documented inline
+at the call site):
+  1. ProgramLoader.Builder.loaderArgs() needs a typed java.util.List of
+     generic.stl.Pair — use addLoaderArg(str, str) instead (jpype).
+  2. The base-address loader arg key is the COMMAND-LINE arg
+     "-loader-baseAddr", not the display name "Base Address". A wrong key is
+     only warned about, so the blob silently loaded at address 0.
+  3. getPrimaryDomainObject() must be given a consumer to keep the program
+     alive past the `with` block, and released to match.
+  4. analyzeAll() must run inside an explicit transaction — without one it
+     SILENTLY MIS-DECODES instructions and finds 0 functions.
+  5. A raw binary import has no entry point, so nothing is ever
+     disassembled unless we do it explicitly (see ensure_disassembled).
+
+add_blob's createInitializedBlock path is still the least-exercised part of
+this file — it is not covered by the verification above.
 
 REQUIRES the kotcrab/ghidra-allegrex extension installed in your Ghidra
 (https://github.com/kotcrab/ghidra-allegrex, Apache-2.0) — it's what adds
@@ -70,16 +81,38 @@ class GhidraState:
         self.program = None
         self.flat_api = None
         self.imported_ranges = []  # list of (start, end) already-imported blobs
+        # A real java.lang.Object identity token used as the DomainObject
+        # "consumer" in getPrimaryDomainObject(consumer)/program.release(consumer)
+        # — must be a genuine Java object (jpype has no overload rule that
+        # coerces an arbitrary Python instance into java.lang.Object; a raw
+        # Python object throws "No matching overloads found", confirmed
+        # live 2026-08-05). Created lazily in import_blob() once the JVM is
+        # up (java.lang can't be imported before pyghidra.start()).
+        self.consumer = None
 
     def is_open(self):
         return self.program is not None
 
     def close(self):
-        if self.program is not None and self.project is not None:
+        # Confirmed live 2026-08-05: DefaultProject has no per-object
+        # save(DomainObject) overload (it only has a no-arg, whole-project
+        # save()) — the old `self.project.save(self.program)` call threw
+        # "No matching overloads found" every time. A single DomainObject
+        # is saved through its own DomainFile instead.
+        if self.program is not None:
+            from ghidra.util.task import ConsoleTaskMonitor
             try:
-                self.project.save(self.program)
+                self.program.getDomainFile().save(ConsoleTaskMonitor())
             except Exception:
                 traceback.print_exc(file=sys.stderr)
+            # Release the consumer reference import_blob() took out via
+            # getPrimaryDomainObject(self.consumer) — must be paired 1:1
+            # or the DomainObject leaks (stays "in use" forever).
+            if self.consumer is not None:
+                try:
+                    self.program.release(self.consumer)
+                except Exception:
+                    traceback.print_exc(file=sys.stderr)
         if self.project is not None:
             try:
                 self.project.close()
@@ -131,10 +164,28 @@ def import_blob(base_address, raw_bytes, program_name="psp_code"):
     data references resolve correctly against addresses reported elsewhere
     (ppsspp_get_registers, ppsspp_backtrace, etc).
 
-    UNVERIFIED: the loaderArgs option name "Base Address" matches Ghidra's
-    BinaryLoader as documented, but the exact ProgramLoader.Builder method
-    chain (loaders/language/loaderArgs/project/name/load) has not been
-    exercised against a real Ghidra build in this environment.
+    Confirmed working 2026-08-05 against a real Ghidra 12.1.2 + ghidra-allegrex
+    install. Two separate bugs were fixed here:
+
+    1. ProgramLoader.Builder.loaderArgs(List<Pair<String,String>>) needs a real
+       java.util.List of Ghidra's internal generic.stl.Pair — passing a raw
+       Python list (even of tuples) throws "No matching overloads found" from
+       jpype, since jpype does not auto-convert a Python list into a typed
+       java.util.List<Pair<...>> for an overload match. Builder has a
+       single-arg alternative for exactly this case — addLoaderArg(String,
+       String), two plain strings, which jpype converts automatically.
+
+    2. The argument key must be the option's COMMAND-LINE ARG
+       ("-loader-baseAddr"), NOT its display name ("Base Address").
+       ProgramLoader.getLoaderOptions() matches loaderArgs against
+       Option.getArg(), and BinaryLoader builds that arg as
+       Loader.COMMAND_LINE_ARG_PREFIX ("-loader") + "-baseAddr". A key that
+       matches nothing is only a Msg.warn ("Skipping unsupported ...
+       argument") — the load still SUCCEEDS, silently, with the default base
+       address of 0. That made the failure especially confusing: import_blob
+       reported success, but the block landed at 0x00000000 instead of the
+       PSP address, so every later address lookup missed and decompile()
+       failed with a misleading "could not find or create a function".
     """
     from pyghidra import program_loader
     from ghidra.app.util.opinion import BinaryLoader
@@ -150,16 +201,48 @@ def import_blob(base_address, raw_bytes, program_name="psp_code"):
         .name(program_name)
         .loaders(BinaryLoader)
         .language(ALLEGREX_LANGUAGE_ID)
-        .loaderArgs([("Base Address", hex(base_address))])
+        .addLoaderArg("-loader-baseAddr", hex(base_address))
     )
     with builder.load() as load_results:
         load_results.save(ConsoleTaskMonitor())
-        program = load_results.getPrimaryDomainObject()
+        # Confirmed live 2026-08-05: the no-arg getPrimaryDomainObject()
+        # does NOT retain a consumer reference past this `with` block —
+        # LoadResults.close() (end of this block) releases its own
+        # default consumer, and with no other consumer registered the
+        # DomainObject becomes invalid, throwing a NullPointerException
+        # the next time it's touched (AutoAnalysisManager.getProgram()
+        # returned null when FlatProgramAPI() was constructed below).
+        # getPrimaryDomainObject(consumer) registers an explicit extra
+        # consumer that survives past the `with` block's close() — must
+        # be a real java.lang.Object (see GhidraState.consumer's comment)
+        # and must be paired with a matching program.release(consumer)
+        # call, done in GhidraState.close() above.
+        from java.lang import Object as JavaObject  # type: ignore
+        state.consumer = JavaObject()
+        program = load_results.getPrimaryDomainObject(state.consumer)
 
     state.program = program
     from ghidra.program.flatapi import FlatProgramAPI
     state.flat_api = FlatProgramAPI(program)
     state.imported_ranges = [(base_address, base_address + len(raw_bytes))]
+
+    # Guard against a silently-ignored base-address loader arg (see the
+    # docstring's bug #2): if the arg key ever stops matching — e.g. Ghidra
+    # renames it in a future release — the load still "succeeds" with the
+    # block at 0, and every symptom shows up much later and much less
+    # obviously. Fail loudly, here, where the cause is still visible.
+    check_addr = program.getAddressFactory().getDefaultAddressSpace().getAddress(base_address)
+    if not program.getMemory().contains(check_addr):
+        blocks = ", ".join(
+            f"{b.getName()}@{b.getStart()}-{b.getEnd()}" for b in program.getMemory().getBlocks()
+        ) or "(none)"
+        raise RuntimeError(
+            f"Imported blob did not land at its requested base address 0x{base_address:08x} — "
+            f"Ghidra placed it at [{blocks}] instead. This means the '-loader-baseAddr' loader "
+            f"argument was not applied (Ghidra only logs 'Skipping unsupported ... argument' and "
+            f"loads at 0). Check BinaryLoader's command-line arg name for your Ghidra version "
+            f"(Loader.COMMAND_LINE_ARG_PREFIX + '-baseAddr' as of 12.1.2)."
+        )
 
     analysis = analyze_program()
     return {"range": {"start": base_address, "end": base_address + len(raw_bytes)}, **analysis}
@@ -228,9 +311,24 @@ def analyze_program(start=None, end=None):
     if state.program is None:
         raise RuntimeError("No program open — call import_blob first.")
     from ghidra.program.util import GhidraProgramUtilities
-    if GhidraProgramUtilities.shouldAskToAnalyze(state.program):
-        state.flat_api.analyzeAll(state.program)
-        GhidraProgramUtilities.markProgramAnalyzed(state.program)
+
+    # analyzeAll() MUST run inside an explicit transaction. Without one it
+    # does not merely fail loudly — it silently corrupts the program:
+    # confirmed live 2026-08-05 that an untransacted analyzeAll left
+    # 0x0894ACC0 (word 0x26310001, opcode 9 = addiu) decoding as
+    # "sw s1,0x1(s1)", disagreeing with both PPSSPP's disassembler and a
+    # hand-decode, AND reported functionCount 0. Wrapping the same call in
+    # a transaction fixes both: the instruction decodes correctly as
+    # "addiu s1,s1,0x1" and analysis actually finds functions.
+    tx = state.program.startTransaction("mcp-ppsspp analyze")
+    try:
+        if GhidraProgramUtilities.shouldAskToAnalyze(state.program):
+            state.flat_api.analyzeAll(state.program)
+            GhidraProgramUtilities.markProgramAnalyzed(state.program)
+        state.program.endTransaction(tx, True)
+    except Exception:
+        state.program.endTransaction(tx, False)
+        raise
     return {"functionCount": state.program.getFunctionManager().getFunctionCount()}
 
 
@@ -247,9 +345,30 @@ def decompile(address):
     addr = _address_at(address)
     func = state.flat_api.getFunctionContaining(addr)
     if func is None:
-        func = state.flat_api.createFunction(addr, None)
+        # Confirmed live 2026-08-05: a RAW BINARY import has no entry point,
+        # so Ghidra's auto-analysis disassembles nothing at all and
+        # import_blob reports functionCount 0. createFunction() wraps
+        # CreateFunctionCmd, which needs an already-disassembled instruction
+        # at the entry point — on undisassembled bytes it just returns null,
+        # which surfaced as the misleading "Could not find or create a
+        # function". Disassemble at the requested address first (the
+        # disassembler follows code flow from there), THEN create the
+        # function. Both are mutating commands, so they need an open
+        # transaction — FlatProgramAPI.start()/end() manage one internally.
+        ensure_disassembled(addr)
+        state.flat_api.start()
+        try:
+            func = state.flat_api.createFunction(addr, None)
+        finally:
+            state.flat_api.end(True)
     if func is None:
-        raise RuntimeError(f"Could not find or create a function at 0x{address:08x}")
+        raise RuntimeError(
+            f"Could not find or create a function at 0x{address:08x} — "
+            f"disassembly at that address produced no instruction. Check the address is real "
+            f"code (not data/padding), that it's inside an imported range, and that the bytes "
+            f"were dumped with replacements:false (PPSSPP's JIT 'emuhack' marker corrupts the "
+            f"first word of every compiled block otherwise)."
+        )
 
     ifc = DecompInterface()
     ifc.openProgram(state.program)
@@ -361,11 +480,59 @@ def disassemble_text(start_addr, end_addr):
     return "\n".join(lines)
 
 
+def ensure_disassembled(start_addr, end_addr=None):
+    """Make sure the listing actually holds INSTRUCTIONS over this range
+    before anything reads it.
+
+    A raw-binary import has no entry point, so Ghidra's auto-analysis
+    disassembles nothing at all — every byte stays an undefined data byte.
+    Reading the listing in that state yields "?? d0h"-style junk rather
+    than code (confirmed live 2026-08-05: a 480-byte range came back as
+    481 one-byte 'instructions', 0 of which matched PPSSPP's own
+    disassembly of the same bytes). Disassembling first makes Ghidra's
+    output match PPSSPP's exactly.
+
+    Mutating commands need an open transaction — FlatProgramAPI.start()/
+    end() manage one internally.
+    """
+    state.flat_api.start()
+    try:
+        if state.flat_api.getInstructionAt(start_addr) is None:
+            state.flat_api.disassemble(start_addr)
+        # disassemble() follows code flow from `start_addr`, but a plain
+        # address range can hold several disjoint functions with no flow
+        # between them (e.g. after a whole-module import). Sweep forward
+        # for any still-undefined gaps and kick the disassembler there too.
+        #
+        # Step STRICTLY by 4 (MIPS/Allegrex is fixed-width, always 4-byte
+        # aligned). An earlier version walked code-unit to code-unit
+        # instead, which lands on 1-byte undefined-data boundaries and so
+        # asks the disassembler to start mid-instruction — that produced
+        # real, silently-wrong output (0x0894ACC0's `addiu s1,s1,0x1`
+        # came back as `sw s1,0x1(s1)`, confirmed live 2026-08-05).
+        # Anything not 4-aligned is by definition not an instruction start.
+        if end_addr is not None:
+            listing = state.program.getListing()
+            addr = start_addr
+            guard = 0
+            while addr.compareTo(end_addr) < 0 and guard < 8192:
+                guard += 1
+                if listing.getInstructionAt(addr) is None and addr.getOffset() % 4 == 0:
+                    state.flat_api.disassemble(addr)
+                nxt = addr.add(4)
+                if nxt is None or nxt.compareTo(addr) <= 0:
+                    break
+                addr = nxt
+    finally:
+        state.flat_api.end(True)
+
+
 def disassemble(address, size):
     if state.program is None:
         raise RuntimeError("No program open — call import_blob first.")
     start_addr = _address_at(address)
     end_addr = _address_at(address + size)
+    ensure_disassembled(start_addr, end_addr)
     return {"disasm": disassemble_text(start_addr, end_addr)}
 
 
@@ -407,12 +574,15 @@ def handle_command(cmd, params):
 
 
 def handle_client(conn):
+    """Returns True if the client asked us to shut the whole process down,
+    False if it merely disconnected (in which case main() waits for the
+    next connection)."""
     buf = b""
     with conn:
         while True:
             chunk = conn.recv(65536)
             if not chunk:
-                return
+                return False
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
@@ -423,8 +593,15 @@ def handle_client(conn):
                     result = handle_command(msg["cmd"], msg.get("params", {}))
                     reply = {"id": msg["id"], "ok": True, "result": result}
                 except SystemExit:
+                    # Ack the shutdown, then tell main() to actually stop.
+                    # Previously this just `return`ed, which dropped straight
+                    # back into main()'s `while True: server.accept()` — so
+                    # `shutdown` never terminated the process. Every MCP
+                    # server restart then leaked an orphaned JVM (hundreds of
+                    # MB) still holding the Ghidra project lock, which made
+                    # the NEXT session fail with "Unable to lock project!".
                     conn.sendall((json.dumps({"id": msg.get("id"), "ok": True, "result": {}}) + "\n").encode("utf8"))
-                    return
+                    return True
                 except Exception as e:  # noqa: BLE001 — surface any Ghidra/Java exception as a tool error
                     traceback.print_exc(file=sys.stderr)
                     reply = {"id": msg.get("id"), "ok": False, "error": str(e)}
@@ -444,11 +621,16 @@ def main():
             conn, _ = server.accept()
             # One client at a time is expected; handle inline rather than
             # threading, so state (the open Ghidra program) can't race.
-            handle_client(conn)
+            if handle_client(conn):
+                break  # `shutdown` command — stop accepting and exit.
     except KeyboardInterrupt:
         pass
     finally:
         state.close()
+        try:
+            server.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
