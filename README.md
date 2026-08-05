@@ -155,13 +155,21 @@ codebase you can re-export as your persistent symbol store grows.
 remains deliberately out of scope (retail EBOOT decryption needs your own
 keys/tools).
 
-**⚠️ Experimental:** the raw-binary-import-with-explicit-base-address path
-in `scripts/ghidra_sidecar.py` was written against documented pyghidra/Ghidra
-APIs but has not been exercised against a real Ghidra installation (this
-project's development environment had no Ghidra distribution available to
-test against — only the sidecar's IPC protocol layer itself was verified).
-If you hit errors, check `scripts/ghidra_sidecar.py`'s comments for the
-specific calls most likely to need adjusting for your Ghidra version, and
+**Verified end-to-end** (2026-08-05) against Ghidra 12.1.2 + ghidra-allegrex
+v21.3, decompiling a live retail PSP game running in PPSSPP v1.20.4. As a
+correctness check the sidecar's disassembly was diffed instruction-by-instruction
+against PPSSPP's own disassembler over the same address range — **120/120
+identical**. The five Ghidra-API bugs found while getting there (a silently
+ignored base-address loader argument, an untransacted `analyzeAll()` that
+mis-decoded instructions, a `DomainObject` consumer-lifetime error, a jpype
+overload mismatch, and missing explicit disassembly for entry-point-less raw
+imports) are fixed and documented inline at each call site in
+`scripts/ghidra_sidecar.py`.
+
+Still least-exercised: `add_blob`'s `createInitializedBlock` path (used when
+growing an already-open program with additional dumped memory) is not covered
+by that verification. `createInitializedBlock`'s signature varies across
+Ghidra versions — if you hit errors there, check the inline comments, and
 please report back what you find.
 
 ## Tools
